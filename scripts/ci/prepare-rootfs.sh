@@ -75,25 +75,46 @@ sleep 1
 mapfile -t parts < <(lsblk -lnpo NAME,TYPE "$loop" | awk '$2=="part"{print $1}' | sort)
 [ "${#parts[@]}" -ge 2 ] || die "no partitions found on $loop"
 
-# Identify the /boot partition (has loader/entries) and the root partition
-# (has ostree/), independent of BIB's numbering.
-bootpart="" rootpart=""
+# Identify the /boot partition (has loader/) and the root partition (has the
+# ostree repo/deploy tree), independent of BIB's numbering.  Note: the physical
+# root of a bootc image has no top-level /usr (it lives inside the deployment),
+# so /usr must not be used as the root marker.
+bootpart="" rootpart=""; root_opts=()
 for p in "${parts[@]}"; do
     m="$tmp/probe.$(basename "$p")"
     mkdir -p "$m"
     if mount -o ro "$p" "$m" 2>/dev/null; then
-        if [ -z "$bootpart" ] && [ -d "$m/loader" ] && [ -d "$m/ostree" ]; then bootpart=$p; fi
-        if [ -z "$rootpart" ] && [ -d "$m/ostree" ] && [ -d "$m/usr" ]; then rootpart=$p; fi
+        if [ -z "$bootpart" ] && [ -d "$m/loader" ] && { [ -d "$m/ostree" ] || [ -d "$m/entries" ]; }; then
+            bootpart=$p
+        fi
+        if [ -z "$rootpart" ] && { [ -d "$m/ostree/repo" ] || [ -d "$m/ostree/deploy" ]; }; then
+            rootpart=$p
+        fi
+        # btrfs fallback: root subvolume is named "root"
+        if [ -z "$rootpart" ] && [ -d "$m/root/ostree/deploy" ]; then
+            rootpart=$p; root_opts=(-o subvol=root)
+        fi
         umount "$m"
     fi
 done
 [ -n "$bootpart" ] || die "could not find /boot partition"
-[ -n "$rootpart" ] || die "could not find root partition"
-log "boot=$bootpart root=$rootpart"
+[ -n "$rootpart" ] || {
+    lsblk -f "$loop" >&2 || true
+    for p in "${parts[@]}"; do
+        m="$tmp/probe2.$(basename "$p")"; mkdir -p "$m"
+        mount -o ro "$p" "$m" 2>/dev/null && { echo "--- $p"; ls -la "$m" 2>/dev/null | head; } || true
+        umount "$m" 2>/dev/null || true
+    done
+    die "could not find root partition"
+}
+log "boot=$bootpart root=$rootpart ${root_opts[*]:-}"
+fstype=$(blkid -s TYPE -o value "$rootpart" 2>/dev/null || true)
+log "root filesystem: ${fstype:-unknown}"
+[ "$fstype" = ext4 ] || die "root partition is ${fstype:-unknown}, expected ext4 (BIB --rootfs=ext4)"
 
 rootmnt="$tmp/root"; bootmnt="$tmp/boot"
 mkdir -p "$rootmnt" "$bootmnt"
-mount "$rootpart" "$rootmnt"; mounted+=("$rootmnt")
+mount "${root_opts[@]}" "$rootpart" "$rootmnt"; mounted+=("$rootmnt")
 mount "$bootpart" "$bootmnt"; mounted+=("$bootmnt")
 
 log "merging /boot into the root partition"
@@ -179,17 +200,26 @@ if [ ! -r "$kpath" ] && [ -r "$rootmnt/boot$linux" ]; then
 fi
 [ -r "$kpath" ] || die "kernel missing: $kpath"
 [ -r "$ipath" ] || die "initramfs missing: $ipath"
+if [ ! -r "$dtb" ]; then
+    # BLS may omit fdtdir; find the DTB inside the merged /boot tree.
+    alt=$(find "$rootmnt/boot" -type f -path "*/dtb/qcom/$DTB_NAME.dtb" 2>/dev/null | head -1)
+    [ -n "$alt" ] && dtb=$alt
+fi
 [ -r "$dtb" ] || die "DTB missing: $dtb"
 
 log "building UKI for $kver"
 efi="$out/EFI/armadaOS/armada-$kver.efi"
+# os-release lives inside the deployment's /usr, not at the physical root.
+osrelease=$(find "$rootmnt/ostree/deploy" -maxdepth 7 -type f -path '*/usr/lib/os-release' 2>/dev/null | head -1)
+[ -n "$osrelease" ] || osrelease="$rootmnt/usr/lib/os-release"
+[ -r "$osrelease" ] || die "os-release not found (looked under $rootmnt)"
 ukify build \
     --linux "$kpath" \
     --initrd "$ipath" \
     --devicetree "$dtb" \
     --cmdline "$newopts" \
     --uname "$kver" \
-    --os-release "$rootmnt/usr/lib/os-release" \
+    --os-release "$osrelease" \
     --output "$efi"
 zstd -q -T0 -10 -f "$efi" -o "$efi.zst"
 rm -f "$efi"
