@@ -53,7 +53,7 @@ git push origin <branch>
 ## 3. 工作流做了什么
 
 1. `ubuntu-24.04-arm`（公开仓库免费）装 podman/buildah/just/ukify 等；
-2. 下载 linux-7.2.6，按顺序应用 `ci/nabu-kernel/patches/0001..0011`（顺序与你的 PKGBUILD 完全一致：0009 在装完 DTS 后打），装 `sm8150-xiaomi-nabu.dts`/`sm8150-wcd9340.dtsi`；
+2. 下载 linux-7.2.6，按顺序应用 `ci/nabu-kernel/patches/0001..0014`（顺序与你的 PKGBUILD 完全一致：0012/0013 在 0011 后，0009 在装完 DTS 后，0014 在 0009 后），装 `sm8150-xiaomi-nabu.dts`/`sm8150-wcd9340.dtsi`；
 3. 用设备 7.0 config + `nabu-kernel-additions.config` 配内核，构建 `Image modules qcom/sm8150-xiaomi-nabu.dtb`；
 4. 打成 Armada 期望的 `armada-kernel-7.2.6-sm8150-726-1.tar.zst`，注册成 `localhost/armada/pkg/kernel:<hash>`；
 5. `just build` 组装 Armada rootfs：本地 kernel + 上游 GHCR 的其余 25 个包（不会重编 26 个包）；
@@ -63,6 +63,14 @@ git push origin <branch>
 9. 上传 artifact：`armadaos-rootfs-YYYYMMDD.img.gz`、`EFI/armadaOS/armada-<kver>.efi`、`sha256sums.txt`、`install.txt`（+ 内核 tar 单独 artifact）。
 
 > 内核策略说明：这是 **pristine 7.2.6 + nabu 11 patch**，不是 Armada 自带的「7.2.6 + 192 patch」内核。原因是两者冲突（Armada 已有 bonded-DSI PLL 修复 `0048b`、qcom 电源/显示补丁等，nabu 的 0007/0008/0010/0011 会重复或上下文冲突）。nabu 不需要 Armada 的掌机 HDR/输入/风扇补丁；先保证显示/触摸/充电/音频可用，后续再考虑合并 Armada 的 DPU 色彩补丁。
+
+## 3.5 VPU / iris 硬件解码（pkgrel 7）
+
+- `0012` 把 7.0 上验证过的 nabu iris 驱动（legacy VPU5 + `sm8150_data`）前向移植到 7.2.6；
+- `0013` 让 `videocc-sm8150` 的 `venus_gdsc` 使用 `HW_CTRL_TRIGGER`；
+- `0014` 在 `sm8150.dtsi` 加 `video-codec@aa00000`（Iris1/VPU5、3 GDSC、7 clock/4 reset、SID 0x2300、6 OPP）并在 nabu DTS 中 `&venus` 使能；
+- `image/qcom-iris.conf` → `/etc/modprobe.d/qcom-iris.conf`（`allow_fw_boot=1 cached_capture=1`）；镜像还会在存在 `qcom/sm8150/Xiaomi/nabu/venus.mbn` 时补一个**小写** `xiaomi` 路径的符号链接（DT 里写的是小写）。
+- 该内核仍需 `CONFIG_VIDEO_QCOM_IRIS=m`（已加入 `nabu-kernel-additions.config`）；验证：`ls /dev/video*`、`dmesg | grep -i iris`、`v4l2-ctl --list-devices`。
 
 ## 4. 在平板上安装
 

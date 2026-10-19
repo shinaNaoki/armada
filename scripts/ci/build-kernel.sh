@@ -46,7 +46,7 @@ fi
 
 cd "linux-$KERNEL_VER"
 
-log "applying 11 nabu forward-port patches"
+log "applying 14 nabu forward-port patches"
 apply() { patch -Np1 -i "$assets/patches/$1"; }
 apply 0001-sm8150-dtsi-add-slim-sound.patch
 apply 0002-drm-panel-nt36523-add-nabu.patch
@@ -58,11 +58,14 @@ apply 0007-dispcc-sm8150-revert-ops-parent-enable.patch
 apply 0008-dsi-phy-7nm-fix-bonded-pll-init.patch
 apply 0010-power-supply-nabu-charging-drivers.patch
 apply 0011-power-supply-qcom-smbx-add-pm8150b-smb5.patch
+apply 0012-media-iris-sm8150-port.patch
+apply 0013-clk-videocc-sm8150-hw-ctrl-trigger.patch
 
 log "installing nabu board DTS"
 install -m644 "$assets/dts/sm8150-xiaomi-nabu.dts" arch/arm64/boot/dts/qcom/
 install -m644 "$assets/dts/sm8150-wcd9340.dtsi" arch/arm64/boot/dts/qcom/
 apply 0009-arm64-dts-nabu-charging-nodes.patch
+apply 0014-arm64-dts-nabu-iris-vpu.patch
 
 grep -q 'sm8150-xiaomi-nabu.dtb' arch/arm64/boot/dts/qcom/Makefile ||
     echo 'dtb-$(CONFIG_ARCH_QCOM) += sm8150-xiaomi-nabu.dtb' >> arch/arm64/boot/dts/qcom/Makefile

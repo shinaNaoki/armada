@@ -1,0 +1,196 @@
+diff -ruN a/Documentation/devicetree/bindings/media/qcom,sm8150-iris.yaml b/Documentation/devicetree/bindings/media/qcom,sm8150-iris.yaml
+--- a/Documentation/devicetree/bindings/media/qcom,sm8150-iris.yaml	1970-01-01 08:00:00.000000000 +0800
++++ b/Documentation/devicetree/bindings/media/qcom,sm8150-iris.yaml	2026-10-19 14:51:17.837384779 +0800
+@@ -0,0 +1,90 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/media/qcom,sm8150-iris.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: Qualcomm SM8150 iris video encode and decode accelerators
++
++maintainers:
++  - The Qualcomm SM8150 mainline community
++
++description: |
++  The iris video processing unit is a video encode and decode accelerator
++  present on Qualcomm SM8150 and related SoCs.
++
++properties:
++  compatible:
++    enum:
++      - qcom,sm8150-iris
++
++  reg:
++    maxItems: 1
++
++  interrupts:
++    maxItems: 1
++
++  power-domains:
++    maxItems: 3
++
++  power-domain-names:
++    items:
++      - const: venus
++      - const: vcodec0
++      - const: mx
++
++  clocks:
++    maxItems: 3
++
++  clock-names:
++    items:
++      - const: iface
++      - const: core
++      - const: vcodec0_core
++
++  firmware-name:
++    maxItems: 1
++
++  interconnects:
++    maxItems: 2
++
++  interconnect-names:
++    items:
++      - const: cpu-cfg
++      - const: video-mem
++
++  resets:
++    maxItems: 2
++
++  reset-names:
++    items:
++      - const: bus
++      - const: core
++
++  iommus:
++    maxItems: 1
++
++  memory-region:
++    maxItems: 1
++
++  operating-points-v2: true
++
++  opp-table:
++    type: object
++
++required:
++  - compatible
++  - reg
++  - interrupts
++  - power-domains
++  - power-domain-names
++  - clocks
++  - clock-names
++  - interconnects
++  - interconnect-names
++  - resets
++  - reset-names
++  - iommus
++  - memory-region
++
++unevaluatedProperties: false
+diff -ruN a/arch/arm64/boot/dts/qcom/sm8150-xiaomi-nabu.dts b/arch/arm64/boot/dts/qcom/sm8150-xiaomi-nabu.dts
+--- a/arch/arm64/boot/dts/qcom/sm8150-xiaomi-nabu.dts	2026-10-19 14:51:17.832208957 +0800
++++ b/arch/arm64/boot/dts/qcom/sm8150-xiaomi-nabu.dts	2026-10-19 14:51:17.835912128 +0800
+@@ -570,6 +570,10 @@
+ 	};
+ };
+ 
++&venus {
++	status = "okay";
++};
++
+ &mdss {
+ 	status = "okay";
+ };
+diff -ruN a/arch/arm64/boot/dts/qcom/sm8150.dtsi b/arch/arm64/boot/dts/qcom/sm8150.dtsi
+--- a/arch/arm64/boot/dts/qcom/sm8150.dtsi	2026-10-19 14:51:17.830821215 +0800
++++ b/arch/arm64/boot/dts/qcom/sm8150.dtsi	2026-10-19 14:51:17.833977492 +0800
+@@ -3773,6 +3773,84 @@
+ 			#power-domain-cells = <1>;
+ 		};
+ 
++		venus: video-codec@aa00000 {
++			compatible = "qcom,sm8150-iris";
++			reg = <0 0x0aa00000 0 0x100000>;
++			interrupts = <GIC_SPI 174 IRQ_TYPE_LEVEL_HIGH>;
++
++			power-domains = <&videocc VENUS_GDSC>,
++					<&videocc VCODEC0_GDSC>,
++					<&videocc VCODEC1_GDSC>,
++					<&rpmhpd SM8150_CX>;
++			power-domain-names = "venus", "vcodec0", "vcodec1", "cx";
++			operating-points-v2 = <&venus_opp_table>;
++
++			clocks = <&videocc VIDEO_CC_MVSC_CORE_CLK>,
++				 <&videocc VIDEO_CC_IRIS_AHB_CLK>,
++				 <&gcc GCC_VIDEO_AXIC_CLK>,
++				 <&videocc VIDEO_CC_MVS0_CORE_CLK>,
++				 <&gcc GCC_VIDEO_AXI0_CLK>,
++				 <&videocc VIDEO_CC_MVS1_CORE_CLK>,
++				 <&gcc GCC_VIDEO_AXI1_CLK>;
++			clock-names = "core", "iface", "bus",
++				      "vcodec0_core", "vcodec0_bus",
++				      "vcodec1_core", "vcodec1_bus";
++
++			resets = <&gcc GCC_VIDEO_AXIC_CLK_BCR>,
++				 <&videocc VIDEO_CC_MVSC_CORE_CLK_BCR>,
++				 <&gcc GCC_VIDEO_AXI0_CLK_BCR>,
++				 <&gcc GCC_VIDEO_AXI1_CLK_BCR>;
++			reset-names = "bus", "core", "vcodec0_bus", "vcodec1_bus";
++
++			interconnects = <&mmss_noc MASTER_VIDEO_P0 0
++						 &mc_virt SLAVE_EBI_CH0 0>,
++					<&gem_noc MASTER_AMPSS_M0 0
++						 &config_noc SLAVE_VENUS_CFG 0>;
++			interconnect-names = "video-mem", "cpu-cfg";
++
++			/* SM8150 v2 moved the VIDC stream IDs from 0x13xx to 0x23xx */
++			iommus = <&apps_smmu 0x2300 0x60>;
++			memory-region = <&venus_mem>;
++
++			firmware-name = "qcom/sm8150/xiaomi/nabu/venus.mbn";
++
++			status = "disabled";
++
++			venus_opp_table: opp-table {
++				compatible = "operating-points-v2";
++
++				opp-200000000 {
++					opp-hz = /bits/ 64 <200000000>;
++					required-opps = <&rpmhpd_opp_min_svs>;
++				};
++
++				opp-240000000 {
++					opp-hz = /bits/ 64 <240000000>;
++					required-opps = <&rpmhpd_opp_low_svs>;
++				};
++
++				opp-338000000 {
++					opp-hz = /bits/ 64 <338000000>;
++					required-opps = <&rpmhpd_opp_svs>;
++				};
++
++				opp-365000000 {
++					opp-hz = /bits/ 64 <365000000>;
++					required-opps = <&rpmhpd_opp_svs_l1>;
++				};
++
++				opp-444000000 {
++					opp-hz = /bits/ 64 <444000000>;
++					required-opps = <&rpmhpd_opp_nom>;
++				};
++
++				opp-533000000 {
++					opp-hz = /bits/ 64 <533000000>;
++					required-opps = <&rpmhpd_opp_turbo>;
++				};
++			};
++		};
++
+ 		camnoc_virt: interconnect@ac00000 {
+ 			compatible = "qcom,sm8150-camnoc-virt";
+ 			reg = <0 0x0ac00000 0 0x1000>;

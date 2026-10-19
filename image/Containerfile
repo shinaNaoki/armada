@@ -14,6 +14,14 @@ COPY image/armada-uki-finalize /usr/libexec/armada/armada-uki-finalize
 COPY image/armada-uki-sync.service /usr/lib/systemd/system/armada-uki-sync.service
 COPY image/10-armada-uki.conf /usr/lib/systemd/system/ostree-finalize-staged.service.d/10-armada-uki.conf
 COPY image/uki-dtb /usr/lib/armada/uki-dtb
+# VPU/iris: SM8150 Iris1 needs fw-boot + cached capture, and the DT asks for
+# the lowercase qcom/sm8150/xiaomi/nabu/venus.mbn path.
+COPY image/qcom-iris.conf /etc/modprobe.d/qcom-iris.conf
+RUN if [ -f /usr/lib/firmware/qcom/sm8150/Xiaomi/nabu/venus.mbn ] && \
+       [ ! -e /usr/lib/firmware/qcom/sm8150/xiaomi/nabu/venus.mbn ]; then \
+        mkdir -p /usr/lib/firmware/qcom/sm8150/xiaomi/nabu && \
+        ln -s ../../Xiaomi/nabu/venus.mbn /usr/lib/firmware/qcom/sm8150/xiaomi/nabu/venus.mbn; \
+    fi
 
 RUN chmod 0755 /usr/libexec/armada/armada-uki-update /usr/libexec/armada/armada-uki-finalize \
  && rm -f /usr/lib/systemd/system/ostree-finalize-staged.service.d/10-armada-bootimg.conf
