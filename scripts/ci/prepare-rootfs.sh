@@ -175,6 +175,7 @@ fi
 [ -r "$dtb" ] || die "DTB missing: $dtb"
 
 log "building UKI for $kver"
+efi="$out/EFI/armadaOS/armada-$kver.efi"
 ukify build \
     --linux "$kpath" \
     --initrd "$ipath" \
@@ -182,8 +183,10 @@ ukify build \
     --cmdline "$newopts" \
     --uname "$kver" \
     --os-release "$rootmnt/usr/lib/os-release" \
-    --output "$out/EFI/armadaOS/armada-$kver.efi"
-log "UKI: $out/EFI/armadaOS/armada-$kver.efi ($(du -h "$out/EFI/armadaOS/armada-$kver.efi" | cut -f1))"
+    --output "$efi"
+zstd -q -T0 -10 -f "$efi" -o "$efi.zst"
+rm -f "$efi"
+log "UKI: $efi.zst ($(du -h "$efi.zst" | cut -f1))"
 
 # Export the root partition as a dd-able ext4 image.
 umount "$bootmnt"; umount "$rootmnt"
@@ -200,30 +203,34 @@ imgname="armadaos-rootfs-$VER.img"
 mkdir -p "$out"
 cp --sparse=always "$img" "$out/$imgname"
 
-log "compressing"
-if command -v pigz >/dev/null; then
-    pigz -6 -p "$(nproc)" -c "$out/$imgname" > "$out/$imgname.gz"
-else
-    gzip -6 -c "$out/$imgname" > "$out/$imgname.gz"
-fi
+( cd "$out" && sha256sum "$imgname" > "$imgname.sha256" )
+log "compressing with zstd"
+zstd -q -T0 -10 -f "$out/$imgname" -o "$out/$imgname.zst"
 rm -f "$out/$imgname"
-( cd "$out" && sha256sum "EFI/armadaOS/armada-$kver.efi" "$imgname.gz" > sha256sums.txt )
+( cd "$out" && sha256sum "EFI/armadaOS/armada-$kver.efi.zst" "$imgname.zst" > sha256sums.txt )
 
 cat > "$out/install.txt" <<EOF
 Armada nabu image set ($VER)
 
-1) rootfs (on the tablet, from Arch or a live USB):
-   zcat $imgname.gz | sudo dd of=/dev/disk/by-partlabel/$ROOT_LABEL bs=4M conv=fsync status=progress
+1) rootfs decompress:
+   zstd -d $imgname.zst -o $imgname
+   # if the release asset is split into parts:
+   #   cat $imgname.zst.part-* | zstd -d > $imgname
+   sha256sum -c $imgname.sha256
+
+2) rootfs (on the tablet, from Arch or a live USB):
+   sudo dd if=$imgname of=/dev/disk/by-partlabel/$ROOT_LABEL bs=4M conv=fsync status=progress
    # the first boot grows the ext4 fs to the partition (x-systemd.growfs)
 
-2) UKI (mount the ESP):
+3) UKI decompress (mount the ESP):
+   zstd -d armada-$kver.efi.zst -o armada-$kver.efi
    sudo mkdir -p /boot/efi/EFI/armadaOS
    sudo cp armada-$kver.efi /boot/efi/EFI/armadaOS/
 
-3) rEFInd will list EFI/armadaOS/armada-$kver.efi (if not, add a menuentry);
+4) rEFInd will list EFI/armadaOS/armada-$kver.efi (if not, add a menuentry);
    keep the old Arch/Windows entries intact.
 
-4) First boot: root=PATLABEL=$ROOT_LABEL, /etc/fstab uses PARTLABEL=$ROOT_LABEL
+5) First boot: root=PATLABEL=$ROOT_LABEL, /etc/fstab uses PARTLABEL=$ROOT_LABEL
    and PARTLABEL=$ESP_LABEL. If the rootfs was dd'ed to a different label,
    edit /etc/fstab and the UKI cmdline accordingly.
 EOF

@@ -86,13 +86,20 @@ git push origin <branch>
 ## 4. 在平板上安装
 
 ```bash
-# 1) 写 rootfs 到 linux 分区（会覆盖现 Arch；先备份）
-zcat armadaos-rootfs-YYYYMMDD.img.gz | sudo dd of=/dev/disk/by-partlabel/linux bs=4M conv=fsync status=progress
+# 0) 从 GitHub Releases 下载：*.img.zst（或分卷 part-*）、*.efi.zst、*.sha256、install.txt
+# 1) 解压 rootfs（分卷时用 cat）
+zstd -d armadaos-rootfs-YYYYMMDD.img.zst -o armadaos-rootfs.img
+# cat armadaos-rootfs-YYYYMMDD.img.zst.part-* | zstd -d > armadaos-rootfs.img
+sha256sum -c armadaos-rootfs-YYYYMMDD.img.sha256
+
+# 2) 写 rootfs 到 linux 分区（会覆盖现 Arch；先备份）
+sudo dd if=armadaos-rootfs.img of=/dev/disk/by-partlabel/linux bs=4M conv=fsync status=progress
 # 首启由 x-systemd.growfs 扩到整分区
 
-# 2) UKI 拷到 ESP
+# 3) 解压 UKI 并拷到 ESP
+zstd -d armada-7.2.6-sm8150-726-1.efi.zst -o armada-7.2.6-sm8150-726-1.efi
 sudo mkdir -p /boot/efi/EFI/armadaOS
-sudo cp EFI/armadaOS/armada-7.2.6-sm8150-726-1.efi /boot/efi/EFI/armadaOS/
+sudo cp armada-7.2.6-sm8150-726-1.efi /boot/efi/EFI/armadaOS/
 
 # 3) rEFInd：一般会自动扫到 EFI/armadaOS/*.efi；若没有，在 refind.conf 加：
 # menuentry "ArmadaOS (nabu)" {
@@ -126,7 +133,7 @@ hostname=`xiaomi-nabu`。
 - [ ] BIB 的 raw 分区布局：脚本按内容自动识别 `/boot`（含 `loader/`+`ostree/`）和 root（含 `/usr`+`/ostree`）；若 BIB 用 systemd-boot 把 BLS 放 ESP，需要再改。
 - [ ] 合并后 root 分区空间（16 GiB）是否够 Armada rootfs；不够就调 `ci/disk-nabu.toml` 到 20 GiB。
 - [ ] UKI 大小 ~70–110 MB，ESP FAT 目前只有 264 MB 可用；**先备份并扩容 ESP FAT**（`fatresize -s max /dev/sda31`），或只保留 1 个 UKI。
-- [ ] artifact 上传大小：rootfs.gz 约 4–6 GB；`upload-artifact` 若超限，改为只上传到 Release/对象存储或拆分。
+- [ ] Release 上传：rootfs zstd 后若超过 2 GiB，工作流会自动 split 成 `*.part-00/01/...`；GitHub Release 单文件上限 2 GiB，本地 `cat part-* | zstd -d` 合并即可。
 - [ ] 首启：`journalctl -b` 看 `ostree-prepare-root`、`root=PARTLABEL=linux` 是否解析成功；`systemctl status armada-uki-sync`。
 - [ ] `bootc status` 的 origin 是否为 `ghcr.io/<你>/armada-nabu:nabu`；`bootc upgrade` 能拉新镜像。
 - [ ] 音频（7.2.6 NGD）、触摸、充电、Wi-Fi、GPU 按你 7.2.6 真机清单复测。

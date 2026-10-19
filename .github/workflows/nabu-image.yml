@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 concurrency:
@@ -105,17 +105,31 @@ jobs:
           find out -type f -printf '%s %p\n' | sort -n | tail -10
           cat out/sha256sums.txt || true
 
-      - name: Upload rootfs + UKI
-        uses: actions/upload-artifact@v4
-        with:
-          name: armada-nabu-${{ github.run_number }}
-          compression-level: 0
-          retention-days: 14
-          path: |
-            out/armadaos-rootfs-*.img.gz
-            out/EFI/armadaOS/*.efi
-            out/sha256sums.txt
-            out/install.txt
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euxo pipefail
+          command -v gh >/dev/null || { sudo apt-get update; sudo apt-get install -y gh; }
+          tag="nabu-$(date -u +%Y%m%d)-${GITHUB_RUN_NUMBER}"
+          rm -rf release
+          mkdir -p release
+          cp out/EFI/armadaOS/*.efi.zst release/
+          cp out/armadaos-rootfs-*.img.zst release/
+          cp out/armadaos-rootfs-*.img.sha256 release/ 2>/dev/null || true
+          cp out/install.txt release/
+          img=$(ls release/armadaos-rootfs-*.img.zst)
+          # GitHub release assets are limited to 2 GiB; split larger images.
+          if [ "$(stat -c%s "$img")" -gt 1900000000 ]; then
+              split -b 1900000000 -d -a 2 "$img" "$img.part-"
+              rm -f "$img"
+          fi
+          ( cd release && sha256sum *.zst* *.sha256 > sha256sums.txt )
+          GH_REPO="${{ github.repository }}" gh release create "$tag" \
+            --title "Armada nabu $(date -u +%Y-%m-%d)" \
+            --notes-file out/install.txt \
+            --latest=false \
+            release/*
 
       - name: Upload kernel tarball
         uses: actions/upload-artifact@v4
