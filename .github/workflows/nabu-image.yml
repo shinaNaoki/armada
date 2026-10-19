@@ -32,11 +32,16 @@ jobs:
           set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            podman buildah just skopeo systemd-ukify jq \
+            podman buildah skopeo systemd-ukify jq \
             e2fsprogs dosfstools mtools rsync pigz zstd xz-utils cpio \
             bc bison flex libssl-dev libelf-dev dwarves gcc make perl \
             curl git ca-certificates kmod
-          podman --version; buildah --version; just --version; ukify --version
+          podman --version; buildah --version; ukify --version
+
+      # Ubuntu 24.04's just 1.21 cannot parse the repo's [group(...)]
+      # attributes; use the same just action as upstream's build.yml.
+      - name: Install just
+        uses: ublue-os/just-action@30ab4659369934b65b655bf8d2fa4ddd6547d384 # v3
 
       - name: Resolve image name
         id: img
@@ -67,6 +72,7 @@ jobs:
           set -euxo pipefail
           # just build picks the local kernel image (same content hash) and
           # pulls every other package image from ghcr.io/armada-os/armada/pkg.
+          command -v just; just --version
           sudo env PATH="$PATH" just build
           sudo podman images --format '{{.Repository}}:{{.Tag}} {{.Size}}' | head -20
 
