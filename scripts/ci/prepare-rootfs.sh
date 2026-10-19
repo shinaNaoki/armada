@@ -46,7 +46,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$tmp/image" "$out/EFI/armadaOS"
+mkdir -p "$tmp" "$out/EFI/armadaOS"
 
 log "building ext4 raw disk with BIB from $image"
 podman run --rm --privileged --pull=newer --net=host --platform linux/arm64 \
@@ -54,14 +54,21 @@ podman run --rm --privileged --pull=newer --net=host --platform linux/arm64 \
     --security-opt apparmor=unconfined \
     --cap-add=CAP_MKNOD \
     -v "$DISK_CONFIG":/config.toml:ro \
-    -v "$tmp/image":/output \
+    -v "$tmp":/output \
     -v /var/lib/containers/storage:/var/lib/containers/storage \
     "$BIB_IMAGE" \
     --type raw --use-librepo=True --rootfs=ext4 --target-arch arm64 "$image" \
     || die "BIB failed (does bootc-image-builder support --rootfs=ext4 here?)"
 
 raw="$tmp/image/disk.raw"
-[ -f "$raw" ] || die "BIB did not produce $raw"
+if [ ! -f "$raw" ]; then
+    # BIB writes <output>/<export>/disk.raw; tolerate a different export name.
+    raw=$(find "$tmp" -maxdepth 4 -type f -name 'disk.raw' 2>/dev/null | head -1)
+fi
+[ -n "${raw:-}" ] && [ -f "$raw" ] || {
+    find "$tmp" -maxdepth 3 -ls >&2 || true
+    die "BIB did not produce a disk.raw under $tmp"
+}
 
 loop=$(losetup -fP --show "$raw") || die "losetup failed"
 sleep 1
