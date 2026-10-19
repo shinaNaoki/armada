@@ -1,0 +1,122 @@
+name: nabu Armada image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: nabu-image-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TAG: nabu
+
+jobs:
+  build:
+    name: build rootfs + UKI
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 300
+    steps:
+      - name: Free disk space
+        uses: ublue-os/remove-unwanted-software@cc0becac701cf642c8f0a6613bbdaf5dc36b259e # v9
+        with:
+          remove-codeql: true
+
+      - uses: actions/checkout@v4
+
+      - name: Install host tools
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            podman buildah just skopeo systemd-ukify jq \
+            e2fsprogs dosfstools mtools rsync pigz zstd xz-utils cpio \
+            bc bison flex libssl-dev libelf-dev dwarves gcc make perl \
+            curl git ca-certificates kmod
+          podman --version; buildah --version; just --version; ukify --version
+
+      - name: Resolve image name
+        id: img
+        run: |
+          set -euo pipefail
+          owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          echo "ref=ghcr.io/${owner}/armada-nabu" >> "$GITHUB_OUTPUT"
+
+      - name: Build nabu 7.2.6 kernel (Armada layout)
+        run: |
+          set -euxo pipefail
+          chmod +x scripts/ci/build-kernel.sh scripts/ci/prepare-rootfs.sh
+          JOBS=$(nproc) ./scripts/ci/build-kernel.sh
+          ls -lh out/armada-kernel-*.tar.zst*
+
+      - name: Register local kernel package image (content-hash ref)
+        run: |
+          set -euxo pipefail
+          hash=$(packages/package-hash.sh kernel)
+          mkdir -p .ci-kernel-pkg
+          cp out/armada-kernel-*.tar.zst out/armada-kernel-*.tar.zst.sha256 .ci-kernel-pkg/
+          printf 'FROM scratch\nCOPY . /kernel/\n' > .ci-kernel-pkg/Containerfile
+          sudo podman build -t "localhost/armada/pkg/kernel:${hash}" .ci-kernel-pkg
+          echo "KERNEL_HASH=${hash}" >> "$GITHUB_ENV"
+
+      - name: Build Armada rootfs image
+        run: |
+          set -euxo pipefail
+          # just build picks the local kernel image (same content hash) and
+          # pulls every other package image from ghcr.io/armada-os/armada/pkg.
+          sudo env PATH="$PATH" just build
+          sudo podman images --format '{{.Repository}}:{{.Tag}} {{.Size}}' | head -20
+
+      - name: Derive nabu image (fstab/hostname/kargs + UKI hooks)
+        run: |
+          set -euxo pipefail
+          sudo podman build -f image/Containerfile \
+            --build-arg BASE=localhost/armada:latest \
+            -t "${{ steps.img.outputs.ref }}:${TAG}" \
+            -t "${{ steps.img.outputs.ref }}:nabu-${GITHUB_SHA::12}" .
+
+      - name: Push image
+        run: |
+          set -euxo pipefail
+          echo '${{ secrets.GITHUB_TOKEN }}' | sudo podman login ghcr.io -u '${{ github.actor }}' --password-stdin
+          sudo podman push "${{ steps.img.outputs.ref }}:${TAG}"
+          sudo podman push "${{ steps.img.outputs.ref }}:nabu-${GITHUB_SHA::12}"
+
+      - name: Build rootfs image + UKI (BIB, merge /boot, export ext4)
+        run: |
+          set -euxo pipefail
+          echo '${{ secrets.GITHUB_TOKEN }}' | sudo podman login ghcr.io -u '${{ github.actor }}' --password-stdin
+          sudo podman pull "${{ steps.img.outputs.ref }}:${TAG}"
+          sudo -E ./scripts/ci/prepare-rootfs.sh \
+            "${{ steps.img.outputs.ref }}:${TAG}" "$PWD/out"
+
+      - name: List results
+        run: |
+          set -euxo pipefail
+          find out -type f -printf '%s %p\n' | sort -n | tail -10
+          cat out/sha256sums.txt || true
+
+      - name: Upload rootfs + UKI
+        uses: actions/upload-artifact@v4
+        with:
+          name: armada-nabu-${{ github.run_number }}
+          compression-level: 0
+          retention-days: 14
+          path: |
+            out/armadaos-rootfs-*.img.gz
+            out/EFI/armadaOS/*.efi
+            out/sha256sums.txt
+            out/install.txt
+
+      - name: Upload kernel tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: armada-kernel-nabu-${{ github.run_number }}
+          compression-level: 0
+          retention-days: 14
+          path: |
+            out/armada-kernel-*.tar.zst
+            out/armada-kernel-*.tar.zst.sha256

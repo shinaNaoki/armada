@@ -1,0 +1,18 @@
+[Unit]
+Description=Rebuild the /EFI/armadaOS UKI for the next-boot deployment
+ConditionPathExists=/run/ostree-booted
+DefaultDependencies=no
+RequiresMountsFor=/sysroot /boot /boot/efi
+After=local-fs.target systemd-journal-flush.service
+Before=ostree-finalize-staged.service final.target
+Conflicts=final.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStopSec=300
+ExecStart=-/usr/bin/ionice -c 2 -n 7 /usr/libexec/armada/armada-uki-update
+ExecStop=/usr/libexec/armada/armada-uki-update
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,17 @@
+#!/bin/bash
+# Regenerate the ESP UKI after OSTree finalizes a staged deployment; roll back
+# if it fails, so the next boot still has a matching UKI.
+set -uo pipefail
+
+if /usr/libexec/armada/armada-uki-update; then
+    exit 0
+else
+    st=$?
+fi
+echo "armada-uki-finalize: UKI update failed ($st); queueing rollback" >&2
+if /usr/bin/bootc rollback; then
+    echo "armada-uki-finalize: rollback queued" >&2
+else
+    echo "armada-uki-finalize: rollback failed ($?)" >&2
+fi
+exit "$st"

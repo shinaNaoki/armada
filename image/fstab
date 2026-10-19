@@ -1,0 +1,2 @@
+PARTLABEL=linux / ext4 rw,errors=remount-ro,x-systemd.growfs,relatime 0 1
+PARTLABEL=esp /boot/efi vfat fmask=0022,dmask=0022 0 1

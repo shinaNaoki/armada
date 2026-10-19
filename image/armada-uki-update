@@ -1,0 +1,120 @@
+#!/bin/bash
+# Rebuild the nabu UKI (ESP /EFI/armadaOS/armada-<kver>-<id>.efi) for the
+# next-boot OSTree deployment, from BLS + /boot/ostree content.
+#
+# ext4 root: btrfs-only rootflags (compress=, subvol=, space_cache=) are
+# filtered out and replaced with rootflags=noatime.
+set -euo pipefail
+
+ESP=${ESP:-/boot/efi}
+BOOTROOT=${BOOTROOT:-/boot}
+UKI_DIR=${UKI_DIR:-${ESP}/EFI/armadaOS}
+UKIFY=${UKIFY:-ukify}
+DTB_NAME_FILE=${DTB_NAME_FILE:-/usr/lib/armada/uki-dtb}
+KEEP=${KEEP:-2}
+ALLOW_UNMOUNTED=${ALLOW_UNMOUNTED:-0}
+LOCKFILE=${LOCKFILE:-/run/armada-uki.lock}
+
+mode=update
+for a in "$@"; do
+    case "$a" in
+        --status) mode=status ;;
+        --force) mode=force ;;
+        --clean) mode=clean ;;
+        *) echo "armada-uki-update: unknown argument: $a" >&2; exit 2 ;;
+    esac
+done
+
+log() { printf 'armada-uki-update: %s\n' "$*" >&2; }
+die() { log "$*"; exit 1; }
+
+bls_default_entry() {
+    local f v
+    for f in "$1"/loader*/entries/*.conf; do
+        [ -f "$f" ] || continue
+        v=$(sed -n 's/^version //p' "$f" | head -1)
+        printf '%s\t%s\n' "${v:-0}" "$f"
+    done | sort -rn | head -1 | cut -f2
+}
+
+sanitize_cmdline() {
+    local opts=$1 t out=() sawrootflags=0
+    set -f
+    for t in $opts; do
+        case "$t" in
+            rootflags=*) sawrootflags=1 ;;
+            *) out+=("$t") ;;
+        esac
+    done
+    # ext4: only noatime matters to us
+    out+=("rootflags=noatime")
+    printf '%s' "${out[*]}"
+}
+
+[ -d "$ESP" ] || die "missing $ESP"
+if [ "$ALLOW_UNMOUNTED" != 1 ]; then
+    findmnt -rn "$ESP" >/dev/null 2>&1 || die "$ESP is not a mountpoint"
+fi
+command -v "$UKIFY" >/dev/null 2>&1 || die "ukify missing"
+[ -r "$DTB_NAME_FILE" ] || die "missing $DTB_NAME_FILE"
+mapfile -t dtbs < <(grep -v '^[[:space:]]*#' "$DTB_NAME_FILE" | tr -d '[:space:]' | grep -v '^$' || true)
+[ "${#dtbs[@]}" -gt 0 ] || die "$DTB_NAME_FILE names no DTB"
+dtb_name=${dtbs[0]}
+
+exec 9>"$LOCKFILE" 2>/dev/null || exec 9>/dev/null
+flock -w 60 9 || die "lock timeout"
+
+protect=""
+prune() {
+    local -a f=()
+    [ -d "$UKI_DIR" ] || return 0
+    mapfile -t f < <(ls -1t "$UKI_DIR"/armada-*.efi 2>/dev/null || true)
+    local i
+    for ((i = KEEP; i < ${#f[@]}; i++)); do
+        [ -n "${f[i]}" ] || continue
+        [ "${f[i]}" = "$protect" ] && continue
+        rm -f -- "${f[i]}" && log "pruned ${f[i]}"
+    done
+}
+[ "$mode" = clean ] && { prune; exit 0; }
+
+entry=$(bls_default_entry "$BOOTROOT")
+[ -n "${entry:-}" ] || die "no BLS entry under $BOOTROOT"
+linux=$(sed -n 's/^linux //p' "$entry" | head -1)
+initrd=$(sed -n 's/^initrd //p' "$entry" | head -1)
+fdtdir=$(sed -n 's/^fdtdir //p' "$entry" | head -1)
+options=$(sed -n 's/^options //p' "$entry" | head -1)
+[ -n "$linux" ] && [ -n "$initrd" ] && [ -n "$options" ] || die "incomplete BLS entry"
+case " $options " in *" ostree="*) ;; *) die "no ostree= in BLS; refusing" ;; esac
+
+kpath="${BOOTROOT%/}${linux#/boot}"
+ipath="${BOOTROOT%/}${initrd#/boot}"
+[ -r "$kpath" ] || die "kernel missing: $kpath"
+[ -r "$ipath" ] || die "initramfs missing: $ipath"
+if [ -n "$fdtdir" ]; then ddir="${BOOTROOT%/}${fdtdir#/boot}"; else ddir="$(dirname "$kpath")/dtb"; fi
+dtb="${ddir%/}/qcom/${dtb_name}.dtb"
+[ -r "$dtb" ] || die "DTB missing: $dtb"
+kver=$(basename "$linux"); kver=${kver#vmlinuz-}
+
+cmdline=$(sanitize_cmdline "$options")
+id=$( { cat "$kpath"; cat "$ipath"; cat "$dtb"; printf '%s\n' "$cmdline"; } | sha256sum | cut -d' ' -f1 )
+out="${UKI_DIR}/armada-${kver}-${id:0:12}.efi"
+log "entry=$entry kver=$kver"
+log "cmdline=$cmdline"
+[ "$mode" = status ] && { [ -f "$out" ] && log "status: current" || log "status: would build"; exit 0; }
+
+mkdir -p "$UKI_DIR"
+if [ "$mode" != force ] && [ -s "$out" ]; then
+    log "already current (${out##*/})"
+else
+    tmp="${out}.tmp.$$"; trap 'rm -f "${tmp:-}"' EXIT
+    "$UKIFY" build --linux "$kpath" --initrd "$ipath" --devicetree "$dtb" \
+        --cmdline "$cmdline" --uname "$kver" --os-release /etc/os-release \
+        --output "$tmp"
+    [ -s "$tmp" ] || die "ukify produced no output"
+    need=$(stat -c %s "$tmp"); avail=$(df -B1 --output=avail "$UKI_DIR" | tail -1 | tr -dc '0-9')
+    [ "${avail:-0}" -ge "$need" ] || die "not enough ESP space: need $need have $avail"
+    mv -f "$tmp" "$out"; trap - EXIT; protect=$out; sync
+    log "wrote $out"
+fi
+prune

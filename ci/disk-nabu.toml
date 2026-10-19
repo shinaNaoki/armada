@@ -1,0 +1,5 @@
+[[customizations.filesystem]]
+mountpoint = "/"
+# 16 GiB gives room for /boot merged into root + Steam/Proton/FEX content;
+# the target partition grows to full size on first boot (x-systemd.growfs).
+minsize = "16 GiB"

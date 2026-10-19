@@ -1,0 +1,22 @@
+ARG BASE=localhost/armada:latest
+FROM ${BASE}
+
+# UKI generation on-device (OTA/rollback) + ext4/nabu tweaks.
+RUN dnf -y install systemd-ukify && dnf clean all
+
+COPY image/fstab /etc/fstab
+COPY image/hostname /etc/hostname
+# ext4 root: no btrfs rootflags; keep FEX/Steam-friendly kargs.
+COPY image/10-armada-nabu.toml /usr/lib/bootc/kargs.d/10-armada.toml
+
+COPY image/armada-uki-update /usr/libexec/armada/armada-uki-update
+COPY image/armada-uki-finalize /usr/libexec/armada/armada-uki-finalize
+COPY image/armada-uki-sync.service /usr/lib/systemd/system/armada-uki-sync.service
+COPY image/10-armada-uki.conf /usr/lib/systemd/system/ostree-finalize-staged.service.d/10-armada-uki.conf
+COPY image/uki-dtb /usr/lib/armada/uki-dtb
+
+RUN chmod 0755 /usr/libexec/armada/armada-uki-update /usr/libexec/armada/armada-uki-finalize \
+ && rm -f /usr/lib/systemd/system/ostree-finalize-staged.service.d/10-armada-bootimg.conf
+
+RUN systemctl enable armada-uki-sync.service || true
+RUN systemctl mask armada-bootimg-sync.service armada-esp-rename.service || true
