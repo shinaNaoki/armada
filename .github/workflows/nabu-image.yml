@@ -74,7 +74,7 @@ jobs:
           # pulls every other package image from ghcr.io/armada-os/armada/pkg.
           command -v just; just --version
           sudo env PATH="$PATH" just build
-          sudo podman images --format '{{.Repository}}:{{.Tag}} {{.Size}}' | head -20
+          sudo podman images --format '{{.Repository}}:{{.Tag}} {{.Size}}'
 
       - name: Derive nabu image (fstab/hostname/kargs + UKI hooks)
         run: |
