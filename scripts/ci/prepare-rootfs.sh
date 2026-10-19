@@ -213,7 +213,10 @@ efi="$out/EFI/armadaOS/armada-$kver.efi"
 osrelease=$(find "$rootmnt/ostree/deploy" -maxdepth 7 -type f -path '*/usr/lib/os-release' 2>/dev/null | head -1)
 [ -n "$osrelease" ] || osrelease="$rootmnt/usr/lib/os-release"
 [ -r "$osrelease" ] || die "os-release not found (looked under $rootmnt)"
+stub=${UKIFY_STUB:-/usr/lib/systemd/boot/efi/linuxaa64.efi.stub}
+[ -r "$stub" ] || die "missing $stub (install systemd-boot-efi)"
 ukify build \
+    --stub "$stub" \
     --linux "$kpath" \
     --initrd "$ipath" \
     --devicetree "$dtb" \

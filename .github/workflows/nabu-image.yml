@@ -32,7 +32,7 @@ jobs:
           set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            podman buildah skopeo systemd-ukify jq \
+            podman buildah skopeo systemd-ukify systemd-boot-efi jq \
             e2fsprogs dosfstools mtools rsync pigz zstd xz-utils cpio \
             bc bison flex libssl-dev libelf-dev dwarves gcc make perl \
             curl git ca-certificates kmod

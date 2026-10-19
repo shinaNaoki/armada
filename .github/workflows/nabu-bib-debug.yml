@@ -43,7 +43,7 @@ jobs:
           set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            podman buildah skopeo systemd-ukify jq \
+            podman buildah skopeo systemd-ukify systemd-boot-efi jq \
             e2fsprogs dosfstools mtools rsync zstd xz-utils cpio \
             curl git ca-certificates kmod
           podman --version; ukify --version
