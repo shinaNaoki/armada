@@ -11,7 +11,7 @@ on:
       image_ref:
         description: "bootc image to build the disk from"
         type: string
-        default: "ghcr.io/shinaNaoki/armada-nabu:nabu"
+        default: "ghcr.io/shinanaoki/armada-nabu:nabu"
       publish_release:
         description: "create a GitHub Release (otherwise only upload small artifacts)"
         type: boolean
@@ -52,13 +52,15 @@ jobs:
         run: |
           set -euxo pipefail
           echo '${{ secrets.GITHUB_TOKEN }}' | sudo podman login ghcr.io -u '${{ github.actor }}' --password-stdin
-          sudo podman pull '${{ inputs.image_ref }}'
+          # GHCR repository names must be lowercase; the owner is shinaNaoki.
+          img=$(printf '%s' '${{ inputs.image_ref }}' | tr '[:upper:]' '[:lower:]')
+          echo "IMAGE_REF=$img" >> "$GITHUB_ENV"
+          sudo podman pull "$img"
 
       - name: Run BIB + post-processing
         run: |
           set -euxo pipefail
-          sudo -E bash scripts/ci/prepare-rootfs.sh \
-            '${{ inputs.image_ref }}' "$PWD/out"
+          sudo -E bash scripts/ci/prepare-rootfs.sh "$IMAGE_REF" "$PWD/out"
 
       - name: Upload small results
         if: always()
