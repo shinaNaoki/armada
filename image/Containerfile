@@ -14,6 +14,11 @@ COPY image/armada-uki-finalize /usr/libexec/armada/armada-uki-finalize
 COPY image/armada-uki-sync.service /usr/lib/systemd/system/armada-uki-sync.service
 COPY image/10-armada-uki.conf /usr/lib/systemd/system/ostree-finalize-staged.service.d/10-armada-uki.conf
 COPY image/uki-dtb /usr/lib/armada/uki-dtb
+# nabu firmware (pmOS xiaomi-nabu-firmware): GPU, ADSP/CDSP, modem, venus,
+# WLAN, CS35L41 speaker amps, Novatek touch.  Fedora's linux-firmware does not
+# carry the nabu-specific blobs.
+COPY image/firmware/ /usr/lib/firmware/
+
 # VPU/iris: SM8150 Iris1 needs fw-boot + cached capture, and the DT asks for
 # the lowercase qcom/sm8150/xiaomi/nabu/venus.mbn path.
 COPY image/qcom-iris.conf /etc/modprobe.d/qcom-iris.conf

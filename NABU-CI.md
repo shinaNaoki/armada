@@ -72,6 +72,17 @@ git push origin <branch>
 - `image/qcom-iris.conf` → `/etc/modprobe.d/qcom-iris.conf`（`allow_fw_boot=1 cached_capture=1`）；镜像还会在存在 `qcom/sm8150/Xiaomi/nabu/venus.mbn` 时补一个**小写** `xiaomi` 路径的符号链接（DT 里写的是小写）。
 - 该内核仍需 `CONFIG_VIDEO_QCOM_IRIS=m`（已加入 `nabu-kernel-additions.config`）；验证：`ls /dev/video*`、`dmesg | grep -i iris`、`v4l2-ctl --list-devices`。
 
+## 3.6 nabu 固件（已包含）
+
+`image/firmware/` 已并入 pmOS 的 `xiaomi-nabu-firmware`（仓库：<https://gitlab.postmarketos.org/panpanpanpan/nabu-firmware>），共 17 个文件 / 约 34 MB，打包进 `/usr/lib/firmware/`：
+
+- `qcom/a630_sqe.fw`、`qcom/a640_gmu.bin`（GPU）
+- `qcom/sm8150/Xiaomi/nabu/{a640_zap.mbn,adsp.mbn,cdsp.mbn,modem.mbn,modemuw.jsn,venus.mbn,wlanmdsp.mbn}`（VPU/音频 DSP/调制解调器/Wi-Fi）
+- `qca/{crbtfw32.tlv,crnv32.bin}`、`cirrus/{cs35l41-*.wmfw,BL/BR/TL/TR-*.bin}`、`novatek/novatek_nt36523_fw.bin`
+- 未收 `hexagonfs/`（Android ADSP 传感器配置，主线用 LSM6DSO + iio-sensor-proxy，不需要）和 `board-2.bin`/`firmware-5.bin`；若后续 Wi-Fi 需要板级数据，再从同仓库补。
+
+> 注意：内核 PKGBUILD 本身并不包含固件，`depends` 里也没有它；固件是独立的 Arch 包 `xiaomi-nabu-firmware`（你平板上已安装）。Armada 的 Fedora 基础镜像不会继承 Arch 的 `/usr/lib/firmware`，所以必须像这里一样显式打进镜像。
+
 ## 4. 在平板上安装
 
 ```bash
