@@ -181,13 +181,15 @@ UKI 的 DTB 解析顺序（`prepare-rootfs.sh` 与设备端 `armada-uki-update` 
    libelf-dev/dwarves/...`，跑 `scripts/ci/build-kernel.sh`，上传内核 artifact。
 2. `image` job（`needs: kernel`，300 分钟）：下载 kernel artifact，用
    `packages/package-hash.sh kernel` 注册本地 kernel 镜像，`just build`，
-   构建 `image/Containerfile`（其中 `nabu-userspace-build` 阶段会从源码编译
+   构建 `image/Containerfile`（`nabu-userspace-build` 阶段使用精简的
+   `quay.io/fedora/fedora:44`，从源码编译
    libssc/hexagonrpc/qrtr/rmtfs/tqftpserv/iio-sensor-proxy/iris-vaapi，
+   只把 `/out` 运行时文件 COPY 进最终镜像；gcc/meson/devel 包不会进入产物，
    首次约增加 10–20 分钟），推送 GHCR，跑 `prepare-rootfs.sh`，
    上传 rootfs/UKI 并（可选）发布 Release（>1.9 GB 自动分卷）。
 
-手动触发：Actions → **nabu Armada image** → Run workflow → 分支 `nabu`；
-`kernel_ref` 留空即使用固定 commit。失败时把 job 日志贴回来。
+手动触发：Actions → **nabu Armada image** → Run workflow → 分支 `main`
+（或 `nabu`）；`kernel_ref` 留空即使用固定 commit。失败时把 job 日志贴回来。
 
 `nabu-bib-debug.yml` 可在镜像已推送后只重跑 BIB 部分，节省内核/rootfs 时间。
 

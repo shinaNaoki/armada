@@ -2,7 +2,7 @@ ARG BASE=localhost/armada:latest
 
 # Build the nabu tablet-mode daemon outside the final image so gcc does not
 # leak into the rootfs.
-FROM ${BASE} AS nabu-tablet-build
+FROM quay.io/fedora/fedora:44 AS nabu-tablet-build
 RUN dnf -y install gcc kernel-headers && dnf clean all
 COPY image/nabu/tablet-mode/nabu-tablet-mode.c /src/nabu-tablet-mode.c
 RUN mkdir -p /out && gcc -O2 -Wall -Wextra /src/nabu-tablet-mode.c -o /out/nabu-tablet-mode
@@ -10,7 +10,7 @@ RUN mkdir -p /out && gcc -O2 -Wall -Wextra /src/nabu-tablet-mode.c -o /out/nabu-
 # Build the sensor stack and iris-vaapi. Fedora has no libssc/hexagonrpc
 # packages and its qrtr build disables qrtr-ns, so these are built from the
 # same pinned sources as the reference nabu packages.
-FROM ${BASE} AS nabu-userspace-build
+FROM quay.io/fedora/fedora:44 AS nabu-userspace-build
 RUN dnf -y install --setopt=install_weak_deps=False \
         gcc gcc-c++ make meson ninja-build pkgconf-pkg-config patch \
         curl tar xz findutils \

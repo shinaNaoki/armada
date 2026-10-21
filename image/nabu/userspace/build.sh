@@ -120,5 +120,14 @@ ln -sfn /usr/lib64/dri/vpu_drv_video.so "$OUT/usr/lib/dri/iris_drv_video.so"
 ln -sfn /usr/lib64/dri/vpu_drv_video.so "$OUT/usr/lib/dri/msm_drm_drv_video.so"
 ln -sfn /usr/lib64/dri/vpu_drv_video.so "$OUT/usr/lib/dri/msm_drv_video.so"
 
+# Keep only runtime files in /out; headers, pkg-config metadata and the
+# libssc Python mocking server are build/test-only and must not reach the
+# final image.
+rm -rf "$OUT/usr/include" "$OUT/usr/share/gir-1.0" "$OUT/usr/share/doc" \
+       "$OUT/usr/share/man" "$OUT/usr/lib64/pkgconfig"
+find "$OUT/usr/lib64" -type f -name '*.a' -delete
+find "$OUT/usr/lib" -type f -name '*.a' -delete 2>/dev/null || true
+find "$OUT/usr/lib" -maxdepth 5 -type d -name ssc_server -prune -exec rm -rf {} + 2>/dev/null || true
+
 echo "nabu userspace stack installed under $OUT"
 find "$OUT/usr" -maxdepth 3 -type f \( -name '*.so*' -o -name 'hexagonrpcd' -o -name 'qrtr-ns' -o -name 'iio-sensor-proxy' -o -name 'vpu_drv_video.so' \) | sort
