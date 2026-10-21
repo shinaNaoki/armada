@@ -87,6 +87,9 @@ EOF
 # deny most services. sheng lowers this to permissive for the plain export.
 if [ -f "$mnt/etc/selinux/config" ]; then
     sed -i 's/^SELINUX=enforcing/SELINUX=permissive/' "$mnt/etc/selinux/config" || true
+else
+    mkdir -p "$mnt/etc/selinux"
+    printf 'SELINUX=permissive\nSELINUXTYPE=targeted\n' > "$mnt/etc/selinux/config"
 fi
 
 # Plain root has no bootc deployment: make the OTA entry points harmless.
