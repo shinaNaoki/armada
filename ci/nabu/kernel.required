@@ -1,0 +1,78 @@
+# Required post-merge kernel configuration for the Armada nabu port.
+# Format: CONFIG_SYMBOL=value. A value of "n" means the symbol must be absent
+# or explicitly disabled in .config. scripts/ci/build-kernel.sh verifies every
+# line and fails the build with the actual value when one is missing.
+#
+# The device-driver section is intentionally the reference nabu_defconfig
+# (Kumar-Jy/linux nabu/7.2.y); only assert the symbols Armada relies on.
+
+# --- LSM / SELinux ---------------------------------------------------------
+CONFIG_SECURITY_SELINUX=y
+CONFIG_SECURITY_SELINUX_BOOTPARAM=y
+CONFIG_SECURITY_NETWORK=y
+
+# --- bootc / ostree --------------------------------------------------------
+CONFIG_EROFS_FS=y
+CONFIG_EROFS_FS_BACKED_BY_FILE=y
+CONFIG_CONFIGFS_FS=y
+CONFIG_RD_ZSTD=y
+CONFIG_FW_LOADER_COMPRESS_XZ=y
+CONFIG_UNICODE=y
+
+# --- BTF / tracing / scx ---------------------------------------------------
+CONFIG_DEBUG_INFO=y
+CONFIG_DEBUG_INFO_REDUCED=n
+CONFIG_DEBUG_INFO_BTF=y
+CONFIG_BPF_JIT_ALWAYS_ON=y
+CONFIG_BPF_JIT_DEFAULT_ON=y
+CONFIG_DYNAMIC_FTRACE=y
+CONFIG_KPROBES=y
+CONFIG_KPROBE_EVENTS=y
+CONFIG_PERF_EVENTS=y
+
+# --- scheduler / memory ----------------------------------------------------
+CONFIG_SCHED_CLASS_EXT=y
+CONFIG_UCLAMP_TASK=y
+CONFIG_UCLAMP_TASK_GROUP=y
+CONFIG_PSI=y
+CONFIG_PSI_DEFAULT_DISABLED=y
+
+# --- splash / display ------------------------------------------------------
+CONFIG_SYSFB_SIMPLEFB=y
+CONFIG_FRAMEBUFFER_CONSOLE_DEFERRED_TAKEOVER=y
+
+# --- zram / crypto ---------------------------------------------------------
+CONFIG_ZRAM=m
+CONFIG_ZRAM_BACKEND_LZ4=y
+CONFIG_ZRAM_BACKEND_LZO=y
+CONFIG_CRYPTO_ZSTD=y
+
+# --- input / controllers ---------------------------------------------------
+CONFIG_UHID=y
+CONFIG_INPUT_UINPUT=y
+CONFIG_HID_STEAM=m
+CONFIG_HID_PLAYSTATION=m
+
+# --- nabu device support (from nabu_defconfig) ----------------------------
+CONFIG_DRM_MSM=y
+CONFIG_DRM_PANEL_NOVATEK_NT36523=y
+CONFIG_TOUCHSCREEN_NT36523_SPI=m
+CONFIG_BACKLIGHT_KTZ8866=y
+CONFIG_SLIMBUS=y
+CONFIG_QCOM_APR=y
+CONFIG_SND_SOC_SM8150=m
+CONFIG_SND_SOC_WCD934X=m
+CONFIG_SND_SOC_CS35L41_I2C=m
+CONFIG_VIDEO_QCOM_IRIS=m
+CONFIG_QCOM_BMS=y
+CONFIG_CHARGER_IDTP9418=m
+CONFIG_QCOM_FASTRPC=m
+CONFIG_QRTR=y
+CONFIG_CFG80211=m
+CONFIG_ATH10K_SNOC=m
+CONFIG_EXT4_FS=y
+CONFIG_SCSI_UFS_QCOM=y
+CONFIG_OVERLAY_FS=m
+CONFIG_BINFMT_MISC=m
+CONFIG_IPV6=y
+CONFIG_NETFILTER_XTABLES=m
