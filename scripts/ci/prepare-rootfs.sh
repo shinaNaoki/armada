@@ -1,263 +1,180 @@
 #!/bin/bash
-# Turn a built Armada bootc image into:
-#   1) armadaos-rootfs-<ver>.img.gz  — ext4 rootfs image, dd-able to the nabu
-#      `linux` partition (PARTLABEL=linux); contains the ostree deployment,
-#      /boot (merged from BIB's boot partition), kernel modules, firmware.
-#   2) EFI/armadaOS/armada-<kver>.efi — UKI (kernel + initramfs + nabu DTB +
-#      BLS cmdline), to copy onto the ESP.
+# Turn the built Armada container into the sheng-style plain-rootfs nabu image
+# set:
+#   1) armadaos-rootfs-<ver>.img.zst — plain ext4 rootfs (no bootc/OSTree
+#      deployment, no OTA), dd-able to the nabu `linux` partition.
+#   2) EFI/armadaOS/armada-<kver>.efi.zst — UKI (kernel + initramfs + nabu DTB
+#      + root=PARTLABEL=linux cmdline), copied to the ESP for rEFInd.
 #
-# Approach: bootc-image-builder builds a normal ext4 raw disk (ESP + /boot +
-# root); we merge BIB's /boot into the root partition, rewrite fstab/BLS for
-# the nabu partition labels, then export only the root partition and build the
-# UKI from the merged /boot.
+# Why not BIB/OSTree (this is the sheng lesson):
+#   - nabu boots the kernel from a UKI on the ESP (rEFInd/DBKP), not a vendor
+#     Android boot_b image, so the UKI stays.
+#   - but the root is exported verbatim from the container into one plain ext4
+#     image, exactly like armada-sheng's no-OTA export: no /ostree deployment,
+#     no separate /boot partition, no bootc fstab/BLS/ostree= chain. That
+#     removes the stale /boot fstab and deployment-UUID mismatch that leaves
+#     the splash at "Preparing Armada".
 #
-# Requires: root+sodo, podman, losetup/mount, e2fsprogs, rsync, ukify,
-#           pigz/zstd, and bootc-image-builder image.
+# Requires: root, podman, mount/losetup, mkfs.ext4/e2fsprogs, tar with xattrs,
+#           systemd-ukify + the aa64 EFI stub, zstd.
 #
-# Usage: sudo ./scripts/ci/prepare-rootfs.sh <image-ref> <outdir>
-#   e.g. sudo ./scripts/ci/prepare-rootfs.sh ghcr.io/you/armada-nabu:nabu out
+# Usage: sudo -E ./scripts/ci/prepare-rootfs.sh <image-ref> <outdir>
+# Environment:
+#   ROOT_PART=linux       partition label the rootfs is dd'ed to
+#   CONSOLE_MODE=quiet    quiet | verbose (verbose: loglevel=7, mask splash)
+#   IMG_SIZE=20G          temporary ext4 image size (shrunk before export)
 set -euo pipefail
 
 image=${1:?usage: prepare-rootfs.sh <image-ref> <outdir>}
 out=${2:?usage: prepare-rootfs.sh <image-ref> <outdir>}
-repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
-BIB_IMAGE=${BIB_IMAGE:-quay.io/centos-bootc/bootc-image-builder:latest}
-DISK_CONFIG=${DISK_CONFIG:-$repo/ci/disk-nabu.toml}
-ROOT_LABEL=${ROOT_LABEL:-linux}
-ESP_LABEL=${ESP_LABEL:-esp}
+ROOT_PART=${ROOT_PART:-linux}
 DTB_NAME=${DTB_NAME:-sm8150-xiaomi-nabu}
+CONSOLE_MODE=${CONSOLE_MODE:-quiet}
+IMG_SIZE=${IMG_SIZE:-20G}
 VER=$(date +%Y%m%d)
+STUB=${UKIFY_STUB:-/usr/lib/systemd/boot/efi/linuxaa64.efi.stub}
 
 log() { printf '==> %s\n' "$*"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 [ "$(id -u)" = 0 ] || die "run as root (or via sudo)"
-[ -f "$DISK_CONFIG" ] || die "missing $DISK_CONFIG"
-command -v ukify >/dev/null || die "ukify not found (install systemd-ukify)"
-command -v losetup >/dev/null || die "losetup not found"
+for tool in podman mkfs.ext4 mount umount losetup ukify zstd e2fsck resize2fs tar; do
+    command -v "$tool" >/dev/null 2>&1 || die "missing tool: $tool"
+done
+[ -r "$STUB" ] || die "missing $STUB (install systemd-boot-efi)"
+mkdir -p "$out/EFI/armadaOS"
 
-tmp=$(mktemp -d /tmp/armada-nabu.XXXXXX)
-loop=""
-mounted=()
+work=$(mktemp -d /tmp/armada-export.XXXXXX)
+mnt="$work/rootfs"
+img="$work/armadaos-rootfs.img"
+cid=""
+mounted=0
 cleanup() {
-    for m in "${mounted[@]:-}"; do umount "$m" 2>/dev/null || true; done
-    [ -n "$loop" ] && losetup -d "$loop" 2>/dev/null || true
-    rm -rf "$tmp"
+    [ "$mounted" = 1 ] && umount "$mnt" 2>/dev/null || true
+    [ -n "$cid" ] && podman rm -f "$cid" >/dev/null 2>&1 || true
+    rm -rf "$work"
 }
 trap cleanup EXIT
 
-mkdir -p "$tmp" "$out/EFI/armadaOS"
-
-log "building ext4 raw disk with BIB from $image"
-podman run --rm --privileged --pull=newer --net=host --platform linux/arm64 \
-    --security-opt label=type:unconfined_t \
-    --security-opt apparmor=unconfined \
-    --cap-add=CAP_MKNOD \
-    -v "$DISK_CONFIG":/config.toml:ro \
-    -v "$tmp":/output \
-    -v /var/lib/containers/storage:/var/lib/containers/storage \
-    "$BIB_IMAGE" \
-    --type raw --use-librepo=True --rootfs=ext4 --target-arch arm64 "$image" \
-    || die "BIB failed (does bootc-image-builder support --rootfs=ext4 here?)"
-
-raw="$tmp/image/disk.raw"
-if [ ! -f "$raw" ]; then
-    # BIB writes <output>/<export>/disk.raw; tolerate a different export name.
-    raw=$(find "$tmp" -maxdepth 4 -type f -name 'disk.raw' 2>/dev/null | head -1)
+log "pulling $image"
+if ! podman image exists "$image"; then
+    podman pull "$image" >/dev/null
 fi
-[ -n "${raw:-}" ] && [ -f "$raw" ] || {
-    find "$tmp" -maxdepth 3 -ls >&2 || true
-    die "BIB did not produce a disk.raw under $tmp"
-}
-
-loop=$(losetup -fP --show "$raw") || die "losetup failed"
-sleep 1
-mapfile -t parts < <(lsblk -lnpo NAME,TYPE "$loop" | awk '$2=="part"{print $1}' | sort)
-[ "${#parts[@]}" -ge 2 ] || die "no partitions found on $loop"
-
-# Identify the /boot partition (has loader/) and the root partition (has the
-# ostree repo/deploy tree), independent of BIB's numbering.  Note: the physical
-# root of a bootc image has no top-level /usr (it lives inside the deployment),
-# so /usr must not be used as the root marker.
-bootpart="" rootpart=""; root_opts=()
-for p in "${parts[@]}"; do
-    m="$tmp/probe.$(basename "$p")"
-    mkdir -p "$m"
-    if mount -o ro "$p" "$m" 2>/dev/null; then
-        if [ -z "$bootpart" ] && [ -d "$m/loader" ] && { [ -d "$m/ostree" ] || [ -d "$m/entries" ]; }; then
-            bootpart=$p
-        fi
-        if [ -z "$rootpart" ] && { [ -d "$m/ostree/repo" ] || [ -d "$m/ostree/deploy" ]; }; then
-            rootpart=$p
-        fi
-        # btrfs fallback: root subvolume is named "root"
-        if [ -z "$rootpart" ] && [ -d "$m/root/ostree/deploy" ]; then
-            rootpart=$p; root_opts=(-o subvol=root)
-        fi
-        umount "$m"
-    fi
-done
-[ -n "$bootpart" ] || die "could not find /boot partition"
-[ -n "$rootpart" ] || {
-    lsblk -f "$loop" >&2 || true
-    for p in "${parts[@]}"; do
-        m="$tmp/probe2.$(basename "$p")"; mkdir -p "$m"
-        mount -o ro "$p" "$m" 2>/dev/null && { echo "--- $p"; ls -la "$m" 2>/dev/null | head; } || true
-        umount "$m" 2>/dev/null || true
-    done
-    die "could not find root partition"
-}
-log "boot=$bootpart root=$rootpart ${root_opts[*]:-}"
-fstype=$(blkid -s TYPE -o value "$rootpart" 2>/dev/null || true)
-log "root filesystem: ${fstype:-unknown}"
-[ "$fstype" = ext4 ] || die "root partition is ${fstype:-unknown}, expected ext4 (BIB --rootfs=ext4)"
-
-rootmnt="$tmp/root"; bootmnt="$tmp/boot"
-mkdir -p "$rootmnt" "$bootmnt"
-mount "${root_opts[@]}" "$rootpart" "$rootmnt"; mounted+=("$rootmnt")
-mount "$bootpart" "$bootmnt"; mounted+=("$bootmnt")
-
-log "merging /boot into the root partition"
-mkdir -p "$rootmnt/boot"
-cp -a "$bootmnt/." "$rootmnt/boot/"
-
-# UKI transport: no bootloader should rewrite the ESP/BLS on deployment
-# switches; our armada-uki-update hook owns /EFI/armadaOS. Best-effort config.
-if [ -x "$rootmnt/usr/bin/ostree" ]; then
-    chroot "$rootmnt" /usr/bin/ostree config --repo=/ostree/repo set sysroot.bootloader none 2>/dev/null || true
-    chroot "$rootmnt" /usr/bin/ostree config --repo=/ostree/repo set sysroot.bootprefix true 2>/dev/null || true
+cid=$(podman create "$image")
+log "exporting container filesystem"
+truncate -s "$IMG_SIZE" "$img"
+mkfs.ext4 -F -L armada "$img" >/dev/null
+mkdir -p "$mnt"
+mount -o loop "$img" "$mnt"
+mounted=1
+if ! podman export "$cid" | tar -x -C "$mnt" --xattrs --selinux 2>/dev/null; then
+    log "SELinux xattr extraction failed; retrying with --xattrs only"
+    podman export "$cid" | tar -x -C "$mnt" --xattrs
 fi
+podman rm -f "$cid" >/dev/null 2>&1 || true
+cid=""
 
-# Locate the ostree deployment's /etc (fstab/hostname live there) and write
-# the nabu versions. Keep a copy in root/etc too (harmless, used on recovery).
-dep_etc=$(find "$rootmnt/ostree/deploy" -maxdepth 4 -type d -name etc 2>/dev/null | head -1)
-[ -n "$dep_etc" ] || dep_etc="$rootmnt/etc"
-mkdir -p "$dep_etc" "$rootmnt/etc"
-cat > "$tmp/fstab" <<EOF
-PARTLABEL=$ROOT_LABEL / ext4 rw,errors=remount-ro,x-systemd.growfs,relatime 0 1
-PARTLABEL=$ESP_LABEL /boot/efi vfat fmask=0022,dmask=0022 0 1
+# ---------------------------------------------------------------------------
+# De-bootc the exported tree (everything else stays byte-identical).
+# ---------------------------------------------------------------------------
+rm -rf "$mnt/boot"
+mkdir -p "$mnt/boot"
+cat > "$mnt/etc/fstab" <<EOF
+PARTLABEL=${ROOT_PART} / ext4 rw,errors=remount-ro,x-systemd.growfs,relatime 0 1
 EOF
-printf 'xiaomi-nabu\n' > "$tmp/hostname"
-# Keep the existing SELinux label of the image's files when replacing them.
-for pair in "fstab:$dep_etc/fstab" "hostname:$dep_etc/hostname"; do
-    src=${pair%%:*}; ref=${pair#*:}
-    if [ -e "$ref" ] && command -v chcon >/dev/null 2>&1; then
-        chcon --reference="$ref" "$tmp/$src" 2>/dev/null || true
-    fi
+
+# Container-built files carry container_file_t; enforcing on hardware would
+# deny most services. sheng lowers this to permissive for the plain export.
+if [ -f "$mnt/etc/selinux/config" ]; then
+    sed -i 's/^SELINUX=enforcing/SELINUX=permissive/' "$mnt/etc/selinux/config" || true
+fi
+
+# Plain root has no bootc deployment: make the OTA entry points harmless.
+for svc in steamos-update steamos-select-branch; do
+    [ -d "$mnt/usr/bin" ] || continue
+    cat > "$mnt/usr/bin/$svc" <<'EOF'
+#!/bin/bash
+echo "OTA is not available in this plain-rootfs build. Re-flash the image to upgrade." >&2
+exit 1
+EOF
+    chmod 0755 "$mnt/usr/bin/$svc"
 done
-install -m644 "$tmp/fstab" "$dep_etc/fstab"
-install -m644 "$tmp/fstab" "$rootmnt/etc/fstab"
-install -m644 "$tmp/hostname" "$dep_etc/hostname"
-install -m644 "$tmp/hostname" "$rootmnt/etc/hostname"
+systemctl --root "$mnt" mask \
+    bootc-fetch-apply-updates.timer \
+    bootc-fetch-apply-updates.service \
+    ostree-finalize-staged.service \
+    armada-uki-sync.service \
+    >/dev/null 2>&1 || true
+# Remote diagnostics; harmless if openssh-server is not installed.
+systemctl --root "$mnt" enable sshd.service >/dev/null 2>&1 || true
 
-# Sanitize BLS options for ext4 + PARTLABEL root, and collect the UKI cmdline.
-shopt -s nullglob
-entries=("$rootmnt"/boot/loader*/entries/*.conf)
-[ "${#entries[@]}" -gt 0 ] || die "no BLS entries after merging /boot"
-bls=${entries[0]}
-kver=$(basename "$(sed -n 's/^linux //p' "$bls" | head -1)")
-kver=${kver#vmlinuz-}
-linux=$(sed -n 's/^linux //p' "$bls" | head -1)
-initrd=$(sed -n 's/^initrd //p' "$bls" | head -1)
-fdtdir=$(sed -n 's/^fdtdir //p' "$bls" | head -1)
-devicetree=$(sed -n 's/^devicetree //p' "$bls" | head -1)
-options=$(sed -n 's/^options //p' "$bls" | head -1)
+# ---------------------------------------------------------------------------
+# Build the UKI from the container's own kernel/initramfs/DTB.
+# ---------------------------------------------------------------------------
+mapfile -t KVERS < <(find "$mnt/usr/lib/modules" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null)
+[ "${#KVERS[@]}" -eq 1 ] || die "expected exactly one kernel under /usr/lib/modules, found ${#KVERS[@]}"
+KVER=${KVERS[0]}
+VMLINUZ="$mnt/usr/lib/modules/$KVER/vmlinuz"
+INITRD="$mnt/usr/lib/modules/$KVER/initramfs.img"
+DTB="$mnt/usr/lib/modules/$KVER/dtb/qcom/${DTB_NAME}.dtb"
+[ -r "$VMLINUZ" ] || die "missing kernel: $VMLINUZ"
+[ -r "$INITRD" ] || die "missing initramfs: $INITRD"
+[ -r "$DTB" ] || die "missing DTB: $DTB"
 
-sanitize_options() {
-    local opts=$1 out=() t
-    set -f
-    for t in $opts; do
-        case "$t" in
-            root=*|rw|ro|quiet|loglevel=*|console=*|ostree=*|ostree=*) out+=("$t") ;;
-            rootflags=*)
-                # drop btrfs-only flags; ext4 wants just noatime
-                out+=("rootflags=noatime") ;;
-            *) out+=("$t") ;;
-        esac
-    done
-    printf '%s' "${out[*]}"
-}
-newopts=$(sanitize_options "$options")
-# Force PARTLABEL root; keep exactly one rootflags=noatime.
-newopts=$(printf '%s\n' "$newopts" | sed "s#root=[^ ]*#root=PARTLABEL=$ROOT_LABEL#")
-case " $newopts " in
-    *" rootflags="*) ;;
-    *) newopts="rootflags=noatime $newopts" ;;
-esac
-# Rewrite every BLS entry (there is normally one, but be safe).
-for e in "${entries[@]}"; do
-    sed -i "s#^options .*#options $newopts#" "$e"
-done
-log "BLS: $(sed -n 's/^options //p' "$bls")"
-
-kpath="$rootmnt$linux"
-ipath="$rootmnt$initrd"
-dtb="$rootmnt${fdtdir}/qcom/$DTB_NAME.dtb"
-# Some bootc/BIB installs write BLS without the /boot prefix (bootprefix=false).
-if [ ! -r "$kpath" ] && [ -r "$rootmnt/boot$linux" ]; then
-    kpath="$rootmnt/boot$linux"
-    ipath="$rootmnt/boot$initrd"
-    dtb="$rootmnt/boot${fdtdir}/qcom/$DTB_NAME.dtb"
+cmdline="root=PARTLABEL=${ROOT_PART} rw rootwait rootflags=noatime console=tty0 fbcon=rotate:1 allow_mismatched_32bit_el0 acpi=off fw_devlink=permissive systemd.gpt_auto=no psi=1 cgroup_disable=pressure cpufreq.default_governor=schedutil swiotlb=8192 vt.global_cursor_default=0 cryptomgr.notests"
+if [ "$CONSOLE_MODE" = "verbose" ]; then
+    cmdline="$cmdline loglevel=7 systemd.mask=armada-splash-initrd.service systemd.mask=armada-splash-early.service"
+else
+    cmdline="$cmdline quiet loglevel=3"
 fi
-if [ -n "$devicetree" ]; then
-    dtb="$rootmnt$devicetree"
-    [ -r "$dtb" ] || dtb="$rootmnt/boot$devicetree"
-fi
-[ -r "$kpath" ] || die "kernel missing: $kpath"
-[ -r "$ipath" ] || die "initramfs missing: $ipath"
-if [ ! -r "$dtb" ]; then
-    # BLS may omit fdtdir/devicetree and /boot may not carry the DTB; the
-    # kernel package installs it under the deployment's /usr/lib/modules.
-    alt=$(find "$rootmnt/boot" "$rootmnt/ostree/deploy" -type f \
-        -path "*/dtb/qcom/$DTB_NAME.dtb" 2>/dev/null | head -1)
-    [ -n "$alt" ] && dtb=$alt
-fi
-[ -r "$dtb" ] || die "DTB missing: $dtb"
+log "UKI cmdline: $cmdline"
 
-log "building UKI for $kver"
-efi="$out/EFI/armadaOS/armada-$kver.efi"
-# os-release lives inside the deployment's /usr, not at the physical root.
-osrelease=$(find "$rootmnt/ostree/deploy" -maxdepth 7 -type f -path '*/usr/lib/os-release' 2>/dev/null | head -1)
-[ -n "$osrelease" ] || osrelease="$rootmnt/usr/lib/os-release"
-[ -r "$osrelease" ] || die "os-release not found (looked under $rootmnt)"
-stub=${UKIFY_STUB:-/usr/lib/systemd/boot/efi/linuxaa64.efi.stub}
-[ -r "$stub" ] || die "missing $stub (install systemd-boot-efi)"
+efi="$out/EFI/armadaOS/armada-$KVER.efi"
+osrelease="$mnt/usr/lib/os-release"
+[ -r "$osrelease" ] || osrelease="$mnt/etc/os-release"
+[ -r "$osrelease" ] || die "os-release missing in exported tree"
 ukify build \
-    --stub "$stub" \
-    --linux "$kpath" \
-    --initrd "$ipath" \
-    --devicetree "$dtb" \
-    --cmdline "$newopts" \
-    --uname "$kver" \
+    --stub "$STUB" \
+    --linux "$VMLINUZ" \
+    --initrd "$INITRD" \
+    --devicetree "$DTB" \
+    --cmdline "$cmdline" \
+    --uname "$KVER" \
     --os-release "$osrelease" \
     --output "$efi"
+[ -s "$efi" ] || die "ukify produced no output"
 zstd -q -T0 -10 -f "$efi" -o "$efi.zst"
 rm -f "$efi"
 log "UKI: $efi.zst ($(du -h "$efi.zst" | cut -f1))"
 
-# Export the root partition as a dd-able ext4 image.
-umount "$bootmnt"; umount "$rootmnt"
-mounted=()
-img="$tmp/armadaos-rootfs.img"
-log "exporting root partition -> $img"
-dd if="$rootpart" of="$img" bs=4M status=progress
-losetup -d "$loop"; loop=""
-
-log "e2fsck + shrink to minimum (grows back via x-systemd.growfs)"
-e2fsck -fy "$img" >/dev/null || true
+# ---------------------------------------------------------------------------
+# Shrink/export the ext4 root filesystem.
+# ---------------------------------------------------------------------------
+sync
+umount "$mnt"
+mounted=0
+log "shrinking rootfs to actual content"
+e2fsck -f -y "$img" >/dev/null 2>&1 || true
 resize2fs -M "$img" 2>/dev/null || true
-imgname="armadaos-rootfs-$VER.img"
-mkdir -p "$out"
-cp --sparse=always "$img" "$out/$imgname"
+# 4096-align the file end; harmless zeros and keeps fastboot/loop happy.
+sz=$(stat -c %s "$img")
+pad=$(( (sz + 4095) / 4096 * 4096 ))
+[ "$pad" -gt "$sz" ] && truncate -s "$pad" "$img"
+e2fsck -f -y "$img" >/dev/null 2>&1 || true
 
+imgname="armadaos-rootfs-$VER.img"
+mv "$img" "$out/$imgname"
 ( cd "$out" && sha256sum "$imgname" > "$imgname.sha256" )
 log "compressing with zstd"
 zstd -q -T0 -10 -f "$out/$imgname" -o "$out/$imgname.zst"
 rm -f "$out/$imgname"
-( cd "$out" && sha256sum "EFI/armadaOS/armada-$kver.efi.zst" "$imgname.zst" > sha256sums.txt )
+( cd "$out" && sha256sum "EFI/armadaOS/armada-$KVER.efi.zst" "$imgname.zst" > sha256sums.txt )
 
 cat > "$out/install.txt" <<EOF
-Armada nabu image set ($VER)
+Armada nabu plain-rootfs image set ($VER)
+
+Boot model: UKI on the ESP (rEFInd/DBKP) + plain ext4 root on PARTLABEL=${ROOT_PART}.
+There is no bootc/OSTree deployment and no OTA; upgrade by re-flashing.
 
 1) rootfs decompress:
    zstd -d $imgname.zst -o $imgname
@@ -266,20 +183,21 @@ Armada nabu image set ($VER)
    sha256sum -c $imgname.sha256
 
 2) rootfs (on the tablet, from Arch or a live USB):
-   sudo dd if=$imgname of=/dev/disk/by-partlabel/$ROOT_LABEL bs=4M conv=fsync status=progress
-   # the first boot grows the ext4 fs to the partition (x-systemd.growfs)
+   sudo dd if=$imgname of=/dev/disk/by-partlabel/$ROOT_PART bs=4M conv=fsync status=progress
+   # first boot grows the ext4 fs to the partition (x-systemd.growfs)
 
 3) UKI decompress (mount the ESP):
-   zstd -d armada-$kver.efi.zst -o armada-$kver.efi
+   zstd -d armada-$KVER.efi.zst -o armada-$KVER.efi
    sudo mkdir -p /boot/efi/EFI/armadaOS
-   sudo cp armada-$kver.efi /boot/efi/EFI/armadaOS/
+   sudo cp armada-$KVER.efi /boot/efi/EFI/armadaOS/
 
-4) rEFInd will list EFI/armadaOS/armada-$kver.efi (if not, add a menuentry);
-   keep the old Arch/Windows entries intact.
+4) rEFInd will list EFI/armadaOS/armada-$KVER.efi; keep the old entries.
+   If the tablet hangs at "Preparing Armada", re-run this workflow with
+   console_mode=verbose and use the resulting verbose UKI to read the logs.
 
-5) First boot: root=PARTLABEL=$ROOT_LABEL, /etc/fstab uses PARTLABEL=$ROOT_LABEL
-   and PARTLABEL=$ESP_LABEL. If the rootfs was dd'ed to a different label,
-   edit /etc/fstab and the UKI cmdline accordingly.
+5) root=PARTLABEL=$ROOT_PART; /etc/fstab contains only the root entry.
+   If you dd to a different partition label, update the cmdline and fstab.
 EOF
+
 log "done"
 ls -lh "$out" "$out/EFI/armadaOS"

@@ -83,8 +83,14 @@ assert_file image/uki-dtb
 [ "$(tr -d '[:space:]' < "$ROOT/image/uki-dtb")" = "sm8150-xiaomi-nabu" ] ||
     fail "image/uki-dtb must name sm8150-xiaomi-nabu"
 assert_contains image/armada-uki-update "/usr/lib/modules/\${kver}/dtb/qcom"
-assert_contains scripts/ci/prepare-rootfs.sh "devicetree"
-assert_contains scripts/ci/prepare-rootfs.sh "dtb/qcom/\$DTB_NAME.dtb"
+assert_contains scripts/ci/prepare-rootfs.sh "podman export"
+assert_contains scripts/ci/prepare-rootfs.sh 'PARTLABEL=${ROOT_PART} / ext4'
+assert_contains scripts/ci/prepare-rootfs.sh "ukify build"
+assert_contains scripts/ci/prepare-rootfs.sh "CONSOLE_MODE"
+assert_contains scripts/ci/prepare-rootfs.sh "systemd.mask=armada-splash-initrd.service"
+assert_file .github/workflows/build-nabu-export.yml
+assert_contains .github/workflows/build-nabu-export.yml "CONSOLE_MODE"
+assert_contains .github/workflows/build-nabu-export.yml "prepare-rootfs.sh"
 
 # --- userspace -------------------------------------------------------------
 assert_file system_files/usr/share/alsa/ucm2/Xiaomi/nabu/HiFi.conf

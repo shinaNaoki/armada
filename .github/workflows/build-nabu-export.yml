@@ -1,0 +1,134 @@
+name: Build nabu flashable (container export, no OTA)
+
+# sheng-style plain-rootfs export for nabu: take an already-built Armada
+# container, copy its filesystem verbatim into one ext4 image, and bake a UKI
+# from the container's kernel/initramfs/DTB. No bootc/OSTree, no BIB, no OTA.
+#
+# Boot chain for nabu stays rEFInd/DBKP -> UKI on the ESP -> plain ext4 root
+# on PARTLABEL=linux (unlike sheng's vendor ABL boot_b image).
+
+on:
+  workflow_dispatch:
+    inputs:
+      container_ref:
+        description: "Armada nabu container ref (empty = ghcr.io/<owner>/armada-nabu:nabu)"
+        type: string
+        default: ""
+      console_mode:
+        description: "quiet = splash; verbose = loglevel=7 + mask splash"
+        type: choice
+        options:
+          - quiet
+          - verbose
+        default: quiet
+      root_partition:
+        description: "Partition label for the ext4 rootfs (dd target)"
+        type: string
+        default: "linux"
+      publish_release:
+        description: "Publish the flashable image set to a GitHub Release"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  packages: read
+
+concurrency:
+  group: nabu-export-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  export:
+    name: export container -> rootfs + UKI
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    steps:
+      - name: Free disk space
+        uses: ublue-os/remove-unwanted-software@cc0becac701cf642c8f0a6613bbdaf5dc36b259e # v9
+        with:
+          remove-codeql: true
+
+      - uses: actions/checkout@v4
+
+      - name: Install host tools
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            podman systemd-ukify systemd-boot-efi e2fsprogs zstd \
+            curl git ca-certificates
+          podman --version; ukify --version
+
+      - name: Log in to ghcr.io
+        run: |
+          set -euxo pipefail
+          echo '${{ secrets.GITHUB_TOKEN }}' | sudo podman login ghcr.io -u '${{ github.actor }}' --password-stdin
+
+      - name: Resolve container ref
+        id: ref
+        run: |
+          set -euo pipefail
+          ref="${{ inputs.container_ref }}"
+          if [ -z "$ref" ]; then
+            owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+            ref="ghcr.io/${owner}/armada-nabu:nabu"
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "container: $ref"
+
+      - name: Export rootfs + UKI
+        env:
+          CONSOLE_MODE: ${{ inputs.console_mode }}
+          ROOT_PART: ${{ inputs.root_partition }}
+        run: |
+          set -euxo pipefail
+          rm -rf output
+          mkdir -p output
+          sudo -E ./scripts/ci/prepare-rootfs.sh "${{ steps.ref.outputs.ref }}" "$PWD/output"
+          sudo chown -R "$(id -u):$(id -g)" output
+          ls -lh output output/EFI/armadaOS
+
+      - name: Upload flashable
+        uses: actions/upload-artifact@v4
+        with:
+          name: nabu-flashable-${{ github.run_number }}
+          path: output/*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 1
+
+      - name: Split rootfs for Release
+        if: ${{ inputs.publish_release }}
+        run: |
+          set -euxo pipefail
+          cd output
+          img=$(ls armadaos-rootfs-*.img.zst)
+          if [ "$(stat -c%s "$img")" -gt 1900000000 ]; then
+            split -b 1900000000 -d -a 2 "$img" "$img.part-"
+            rm -f "$img"
+          fi
+          ( sha256sum *.zst* *.sha256 > sha256sums.release.txt )
+
+      - name: Publish Release
+        if: ${{ inputs.publish_release }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euxo pipefail
+          command -v gh >/dev/null || { sudo apt-get update; sudo apt-get install -y gh; }
+          tag="nabu-flashable-$(date -u +%Y%m%d)-${GITHUB_RUN_NUMBER}"
+          shopt -s nullglob
+          files=(
+            output/install.txt
+            output/sha256sums.txt
+            output/sha256sums.release.txt
+            output/EFI/armadaOS/*.efi.zst
+            output/armadaos-rootfs-*.img.zst*
+            output/armadaos-rootfs-*.img.sha256
+          )
+          GH_REPO="${{ github.repository }}" gh release create "$tag" \
+            --title "Armada nabu flashable $(date -u +%Y-%m-%d)" \
+            --notes-file output/install.txt \
+            --latest=false \
+            "${files[@]}"
