@@ -73,7 +73,7 @@ meson install -C build
 # qrtr's dependency('systemd') cannot find the unit dir. Install the same
 # unit manually from the source template.
 install -d "$OUT/usr/lib/systemd/system"
-sed 's|@prefix@|/usr|g' src/qrtr-ns.service.in \
+sed 's|@prefix@|/usr|g' qrtr-ns.service.in \
     > "$OUT/usr/lib/systemd/system/qrtr-ns.service"
 
 # --- rmtfs ----------------------------------------------------------------
