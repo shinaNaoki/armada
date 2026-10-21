@@ -160,6 +160,7 @@ kver=${kver#vmlinuz-}
 linux=$(sed -n 's/^linux //p' "$bls" | head -1)
 initrd=$(sed -n 's/^initrd //p' "$bls" | head -1)
 fdtdir=$(sed -n 's/^fdtdir //p' "$bls" | head -1)
+devicetree=$(sed -n 's/^devicetree //p' "$bls" | head -1)
 options=$(sed -n 's/^options //p' "$bls" | head -1)
 
 sanitize_options() {
@@ -198,11 +199,17 @@ if [ ! -r "$kpath" ] && [ -r "$rootmnt/boot$linux" ]; then
     ipath="$rootmnt/boot$initrd"
     dtb="$rootmnt/boot${fdtdir}/qcom/$DTB_NAME.dtb"
 fi
+if [ -n "$devicetree" ]; then
+    dtb="$rootmnt$devicetree"
+    [ -r "$dtb" ] || dtb="$rootmnt/boot$devicetree"
+fi
 [ -r "$kpath" ] || die "kernel missing: $kpath"
 [ -r "$ipath" ] || die "initramfs missing: $ipath"
 if [ ! -r "$dtb" ]; then
-    # BLS may omit fdtdir; find the DTB inside the merged /boot tree.
-    alt=$(find "$rootmnt/boot" -type f -path "*/dtb/qcom/$DTB_NAME.dtb" 2>/dev/null | head -1)
+    # BLS may omit fdtdir/devicetree and /boot may not carry the DTB; the
+    # kernel package installs it under the deployment's /usr/lib/modules.
+    alt=$(find "$rootmnt/boot" "$rootmnt/ostree/deploy" -type f \
+        -path "*/dtb/qcom/$DTB_NAME.dtb" 2>/dev/null | head -1)
     [ -n "$alt" ] && dtb=$alt
 fi
 [ -r "$dtb" ] || die "DTB missing: $dtb"
@@ -270,7 +277,7 @@ Armada nabu image set ($VER)
 4) rEFInd will list EFI/armadaOS/armada-$kver.efi (if not, add a menuentry);
    keep the old Arch/Windows entries intact.
 
-5) First boot: root=PATLABEL=$ROOT_LABEL, /etc/fstab uses PARTLABEL=$ROOT_LABEL
+5) First boot: root=PARTLABEL=$ROOT_LABEL, /etc/fstab uses PARTLABEL=$ROOT_LABEL
    and PARTLABEL=$ESP_LABEL. If the rootfs was dd'ed to a different label,
    edit /etc/fstab and the UKI cmdline accordingly.
 EOF

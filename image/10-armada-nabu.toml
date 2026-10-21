@@ -9,9 +9,15 @@ kargs = [
     "loglevel=3",
     "fbcon=rotate:1",
     "allow_mismatched_32bit_el0",
-    "fw_devlink.strict=1",
+    # nabu boots from the mainline SM8150 DTS: no ACPI, and the 7.2.11 DTS
+    # needs permissive fw_devlink rather than Armada's strict default.
+    "acpi=off",
+    "fw_devlink=permissive",
+    "systemd.gpt_auto=no",
     "psi=1",
     "cgroup_disable=pressure",
     "cpufreq.default_governor=schedutil",
     "swiotlb=8192",
+    "vt.global_cursor_default=0",
+    "cryptomgr.notests",
 ]

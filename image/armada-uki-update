@@ -83,6 +83,7 @@ entry=$(bls_default_entry "$BOOTROOT")
 linux=$(sed -n 's/^linux //p' "$entry" | head -1)
 initrd=$(sed -n 's/^initrd //p' "$entry" | head -1)
 fdtdir=$(sed -n 's/^fdtdir //p' "$entry" | head -1)
+devicetree=$(sed -n 's/^devicetree //p' "$entry" | head -1)
 options=$(sed -n 's/^options //p' "$entry" | head -1)
 [ -n "$linux" ] && [ -n "$initrd" ] && [ -n "$options" ] || die "incomplete BLS entry"
 case " $options " in *" ostree="*) ;; *) die "no ostree= in BLS; refusing" ;; esac
@@ -91,10 +92,25 @@ kpath="${BOOTROOT%/}${linux#/boot}"
 ipath="${BOOTROOT%/}${initrd#/boot}"
 [ -r "$kpath" ] || die "kernel missing: $kpath"
 [ -r "$ipath" ] || die "initramfs missing: $ipath"
-if [ -n "$fdtdir" ]; then ddir="${BOOTROOT%/}${fdtdir#/boot}"; else ddir="$(dirname "$kpath")/dtb"; fi
-dtb="${ddir%/}/qcom/${dtb_name}.dtb"
-[ -r "$dtb" ] || die "DTB missing: $dtb"
 kver=$(basename "$linux"); kver=${kver#vmlinuz-}
+
+# Resolve the DTB: BLS devicetree, then fdtdir, then the module tree (the
+# kernel package installs it there and /boot may not carry it).
+dtb=""
+if [ -n "$devicetree" ]; then
+    dtb="${BOOTROOT%/}${devicetree#/boot}"
+fi
+if [ -z "$dtb" ] || [ ! -r "$dtb" ]; then
+    if [ -n "$fdtdir" ]; then ddir="${BOOTROOT%/}${fdtdir#/boot}"; else ddir="$(dirname "$kpath")/dtb"; fi
+    dtb="${ddir%/}/qcom/${dtb_name}.dtb"
+fi
+if [ ! -r "$dtb" ]; then
+    for candidate in "/usr/lib/modules/${kver}/dtb/qcom/${dtb_name}.dtb" \
+                     "${BOOTROOT%/}/dtb-${kver}/qcom/${dtb_name}.dtb"; do
+        if [ -r "$candidate" ]; then dtb=$candidate; break; fi
+    done
+fi
+[ -r "$dtb" ] || die "DTB missing: ${dtb:-<unresolved>}"
 
 cmdline=$(sanitize_cmdline "$options")
 id=$( { cat "$kpath"; cat "$ipath"; cat "$dtb"; printf '%s\n' "$cmdline"; } | sha256sum | cut -d' ' -f1 )
