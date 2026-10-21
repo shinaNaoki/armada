@@ -7,8 +7,7 @@
 2. 可拷到 ESP 的 **UKI**（`EFI/armadaOS/armada-<kver>.efi`）。
 
 > 本分支（`nabu`）现在是核心硬件 + Plasma 配置层 + 传感器/SLPI + iris VA-API
-> + patched upower + stylus-popup + system-monitor/torch。
-> 相机仍留到后续迭代（Fedora 缺少 camera-studio 需要的 gtk4paintablesink）。
+> + patched upower + stylus-popup + camera-studio + system-monitor/torch。
 
 ## 1. 参考与源码固定
 
@@ -30,6 +29,7 @@
 | iris-vaapi | `b0ef8f7512321d36d52e4a1a52fd3eb0eec9a107` |
 | upower | `1.91.5` + nabu battery-state sed |
 | stylus-popup | `17a42eec965d153b119d9230550d6721523129f7` + 3 patches |
+| camera-studio | `1.0.6`（+ Fedora `libcamera-gstreamer` / `gstreamer1-plugin-gtk4`） |
 
 参考仓库：`Nabu-arch-images`（安装/UKI/Plasma 配置）与 `nabu-pkgs`（Arch 包、
 内核 PKGBUILD、固件、UCM、传感器包）。**不要**再使用旧的 `ci/nabu-kernel/`
@@ -174,6 +174,11 @@ UKI 的 DTB 解析顺序（`prepare-rootfs.sh` 与设备端 `armada-uki-update` 
 - **system-monitor / nabu-torch**：参考仓库的 Python GTK4 应用，
   `system-monitor`/`sysmon`/`nabu-gpu-monitor` 与 `torch`/`flashlight` 命令
   及桌面文件、torch udev 规则。
+- **camera-studio**：参考仓库的 Python GTK4 相机应用；基础包安装
+  `libcamera`/`libcamera-ipa`/`libcamera-gstreamer`/`libcamera-tools`、
+  `gstreamer1-plugin-gtk4`（提供 `gtk4paintablesink`）、
+  `gstreamer1-plugins-base/good`、`python3-pillow`、`v4l-utils`。
+  内核侧 `VIDEO_QCOM_CAMSS`/`OV13B10`/`OV8856` 已加入 `kernel.required`。
 - **Plasma 配置层**（只配置，不重编 Plasma）：
   - `kwinoutputconfig.json`：`DSI-1`、1600×2560@120Hz、`scale=1.75`、
     `Rotated270`、`autoRotation=InTabletMode`、HDR 关闭、`sdrBrightness=200`；
@@ -243,6 +248,8 @@ upower -d              # 电池容量/状态，不应被强制成 discharging
 systemctl --user status stylus-popup
 torch set 100          # 手电筒亮度 0-255
 system-monitor         # GPU/电池/传感器监控
+cam -l                 # libcamera 应列出 OV13B10/OV8856
+camera-studio          # 前后摄像头预览/拍照
 systemctl status hexagonrpcd qrtr-ns rmtfs tqftpserv iio-sensor-proxy
 dmesg | grep -iE "fastrpc|slpi|iris|venus"
 ```
@@ -253,9 +260,11 @@ dmesg | grep -iE "fastrpc|slpi|iris|venus"
 
 ## 10. 已知限制与注意事项
 
-- 相机仍不在本分支：Fedora 未打包 camera-studio 需要的
-  `gtk4paintablesink`（gst-plugins-rs），libcamera 本身可用，但预览管线需要
-  另外补 GStreamer 插件。
+- 相机依赖 Fedora 的 `libcamera-gstreamer` + `gstreamer1-plugin-gtk4`
+  （`gtk4paintablesink`）；若 `cam -l` 看不到摄像头，先看
+  `dmesg | grep -i camss`、`media-ctl -p` 和 `cam -l`。
+- 相机图像质量仍取决于 mainline CAMSS/OV13B10/OV8856 的 ISP 调校，
+  可能不如 Android；这是内核/调校问题，不是用户态缺失。
 - upower 的补丁只移除强制 DISCHARGING 分支；如果电量/状态仍不对，优先看
   `qcom_bms` 的 sysfs 与 `upower -d`。
 - 传感器依赖 SLPI 固件与 `hexagonrpcd` 链路；如果 `monitor-sensor` 无数据，

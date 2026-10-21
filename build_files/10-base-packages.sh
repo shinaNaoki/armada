@@ -78,6 +78,18 @@ pkgs=(
     vulkan-loader
     vulkan-tools
 
+    # Camera (nabu CAMSS + OV13B10/OV8856, camera-studio)
+    gdk-pixbuf2
+    gstreamer1
+    gstreamer1-plugins-base
+    gstreamer1-plugins-good
+    gstreamer1-plugin-gtk4
+    libcamera
+    libcamera-ipa
+    libcamera-gstreamer
+    libcamera-tools
+    python3-pillow
+
     # FEX dependencies - see 12-armada-packages.sh for the main package
     erofs-fuse
     erofs-utils

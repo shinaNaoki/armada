@@ -151,6 +151,16 @@ assert_contains image/nabu/userspace/build.sh "STYLUS_USER_UNIT_DIR=/usr/lib/sys
 assert_contains image/Containerfile "upower.service"
 assert_contains image/Containerfile "stylus-popup.service"
 
+# --- camera ---------------------------------------------------------------
+assert_file system_files/usr/bin/camera-studio
+assert_file system_files/usr/lib/udev/rules.d/90-camera-flash.rules
+assert_contains build_files/10-base-packages.sh "gstreamer1-plugin-gtk4"
+assert_contains build_files/10-base-packages.sh "libcamera-gstreamer"
+assert_contains build_files/10-base-packages.sh "libcamera-tools"
+assert_contains ci/nabu/kernel.required "CONFIG_VIDEO_QCOM_CAMSS=m"
+assert_contains ci/nabu/kernel.required "CONFIG_VIDEO_OV13B10=m"
+assert_contains ci/nabu/kernel.required "CONFIG_VIDEO_OV8856=m"
+
 # --- Plasma / SDDM config layer -------------------------------------------
 assert_file system_files/etc/skel/.config/kwinoutputconfig.json
 assert_contains system_files/etc/skel/.config/kwinoutputconfig.json '"connectorName": "DSI-1"'
