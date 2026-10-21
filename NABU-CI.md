@@ -6,8 +6,8 @@
 1. 可 `dd` 到 `linux` 分区的 **ext4 rootfs 镜像**（含 ostree 部署、内核模块、固件、`/boot`）；
 2. 可拷到 ESP 的 **UKI**（`EFI/armadaOS/armada-<kver>.efi`）。
 
-> 本分支（`nabu`）是核心硬件 + Plasma 配置层的第一版。传感器/自动旋转/自动亮度/
-> upower/相机/iris-vaapi/stylus-popup 留到后续分支迭代。
+> 本分支（`nabu`）现在是核心硬件 + Plasma 配置层 + 传感器/SLPI + iris VA-API。
+> 相机、patched upower、stylus-popup 仍留到后续迭代。
 
 ## 1. 参考与源码固定
 
@@ -21,6 +21,12 @@
 | DTB | `sm8150-xiaomi-nabu.dtb` |
 | 固件包 | `linux-firmware-xiaomi-nabu-25.04.26-1-any.pkg.tar.xz` |
 | 固件 SHA256 | `bef43c32029902bc4c3c1b7c7007c6e5d954fe673933087a836b5a41b567bac9` |
+| libssc | `v0.4.4`（nabu patch） |
+| hexagonrpc | `v0.4.0` |
+| qrtr | `5923eea97377f4a3ed9121b358fd919e3659db7b`（`qrtr-ns` enabled） |
+| rmtfs / tqftpserv | `v1.3` / `v1.2` |
+| iio-sensor-proxy | `3.9` + SSC race/proximity patches |
+| iris-vaapi | `b0ef8f7512321d36d52e4a1a52fd3eb0eec9a107` |
 
 参考仓库：`Nabu-arch-images`（安装/UKI/Plasma 配置）与 `nabu-pkgs`（Arch 包、
 内核 PKGBUILD、固件、UCM、传感器包）。**不要**再使用旧的 `ci/nabu-kernel/`
@@ -38,6 +44,12 @@ image/10-armada-nabu.toml      # ext4 + nabu kargs（覆盖 base 的 kargs.d）
 image/Containerfile            # 固件/UKI 钩子/tablet-mode 编译与安装
 image/firmware/                # nabu 专用固件（小写 qcom/sm8150/xiaomi/nabu）
 image/nabu/tablet-mode/        # 键盘/盖子驱动的 SW_TABLET_MODE 守护进程
+image/nabu/userspace/build.sh  # libssc/hexagonrpc/qrtr-ns/rmtfs/tqftpserv/iio/iris 源码构建
+image/nabu/sensors/patches/    # libssc + iio-sensor-proxy 的 nabu 补丁
+image/nabu/iris/patches/       # iris-vaapi DMA-buf/derive 补丁
+system_files/usr/share/qcom/   # SLPI 传感器 sensors/socinfo 配置树
+system_files/usr/bin/nabu-autobrightness            # 环境光自动亮度
+system_files/usr/libexec/nabu-sensors-recover       # 睡眠/唤醒后的传感器恢复
 image/armada-uki-update        # OTA/回滚后重生成 UKI（含 DTB 回退）
 system_files/usr/share/alsa/ucm2/Xiaomi/nabu/       # 四扬声器 UCM
 system_files/usr/share/alsa/ucm2/conf.d/sm8150/     # 声卡匹配
@@ -138,6 +150,19 @@ UKI 的 DTB 解析顺序（`prepare-rootfs.sh` 与设备端 `armada-uki-update` 
 - **F2FS/userdata**：`CONFIG_F2FS_FS=y` 由 `kernel.required` 断言，镜像内置
   `f2fs-tools`；可手动 `mount -t f2fs -o ro` 读取 userdata。Android 的
   FBE/元数据加密仍需 keymaster/TEE 密钥，不在本分支处理。
+- **SLPI 传感器**：在 image 构建阶段从源码编译 `libssc`、`hexagonrpc`
+  (`hexagonrpcd`)、带 `qrtr-ns` 的 `qrtr`、`rmtfs`、`tqftpserv`，并编译
+  `ssc-support=enabled` 且打了 SSC race/proximity 补丁的 `iio-sensor-proxy` 3.9。
+  镜像内含 `/usr/share/qcom/sm8150/xiaomi/nabu/{sensors,socinfo}` 并部署到
+  `/usr/lib/firmware/hexagonfs`；`hexagonrpcd`、`qrtr-ns`、`rmtfs`、`tqftpserv`
+  及 suspend/resume 单元已 enable；`iio-sensor-proxy` 没有 `[Install]`，由
+  `90-nabu-ssc-accelerometer` udev 规则在 `fastrpc-sdsp` 出现时触发。
+- **自动旋转/自动亮度**：`nabu-tablet-mode` + `nabu-sensors-resume.sh` /
+  `nabu-sensors-recover` 处理休眠后的 SLPI/FastRPC 恢复；`nabu-autobrightness`
+  作为用户服务全局启用，读取 SensorProxy 的环境光并驱动 PowerDevil。
+- **iris VA-API**：从固定 commit `b0ef8f75...` 编译 `iris-vaapi`，安装到
+  `/usr/lib64/dri`（同时保留 `/usr/lib/dri` 链接），配套 dma-heap udev 规则、
+  `99-iris-vaapi.conf`；镜像带 `libva-utils`/`v4l-utils` 便于 `vainfo` 验证。
 - **Plasma 配置层**（只配置，不重编 Plasma）：
   - `kwinoutputconfig.json`：`DSI-1`、1600×2560@120Hz、`scale=1.75`、
     `Rotated270`、`autoRotation=InTabletMode`、HDR 关闭、`sdrBrightness=200`；
@@ -156,7 +181,9 @@ UKI 的 DTB 解析顺序（`prepare-rootfs.sh` 与设备端 `armada-uki-update` 
    libelf-dev/dwarves/...`，跑 `scripts/ci/build-kernel.sh`，上传内核 artifact。
 2. `image` job（`needs: kernel`，300 分钟）：下载 kernel artifact，用
    `packages/package-hash.sh kernel` 注册本地 kernel 镜像，`just build`，
-   构建 `image/Containerfile`，推送 GHCR，跑 `prepare-rootfs.sh`，
+   构建 `image/Containerfile`（其中 `nabu-userspace-build` 阶段会从源码编译
+   libssc/hexagonrpc/qrtr/rmtfs/tqftpserv/iio-sensor-proxy/iris-vaapi，
+   首次约增加 10–20 分钟），推送 GHCR，跑 `prepare-rootfs.sh`，
    上传 rootfs/UKI 并（可选）发布 Release（>1.9 GB 自动分卷）。
 
 手动触发：Actions → **nabu Armada image** → Run workflow → 分支 `nabu`；
@@ -192,15 +219,24 @@ ls /dev/dri /dev/input /sys/class/backlight
 aplay -l
 nmcli device status
 kscreen-doctor -o     # 切到 Plasma 后确认 connector/scale/rotation
+vainfo                 # 应列出 Qualcomm Iris / vpu_drv_video
+monitor-sensor         # 加速度计/环境光应有数据
+systemctl status hexagonrpcd qrtr-ns rmtfs tqftpserv iio-sensor-proxy
+dmesg | grep -iE "fastrpc|slpi|iris|venus"
 ```
 
-本分支预期：显示/触摸/GPU/音频/Wi-Fi/充电可用；Plasma 配置在切到 Plasma 时
+本分支预期：显示/触摸/GPU/音频/Wi-Fi/充电可用；传感器/自动旋转/自动亮度
+在 Plasma 下生效；`vainfo` 能看到 Iris VA-API；Plasma 配置在切到 Plasma 时
 生效；默认 gamescope。
 
 ## 10. 已知限制与注意事项
 
-- 传感器/自动旋转/自动亮度、patched upower、iris-vaapi、相机、stylus-popup
-  不在本分支。
+- 相机、patched upower、stylus-popup 仍不在本分支。
+- 传感器依赖 SLPI 固件与 `hexagonrpcd` 链路；如果 `monitor-sensor` 无数据，
+  先看 `systemctl status hexagonrpcd iio-sensor-proxy` 和
+  `journalctl -u hexagonrpcd -b`。
+- iris VA-API 需要内核 `VIDEO_QCOM_IRIS=m` 和 `venus.mbn`；若 `vainfo` 报
+  driver 不存在，检查 `/usr/lib64/dri/vpu_drv_video.so` 与 udev dma-heap 规则。
 - USB-C DisplayPort alt-mode 是 nabu 硬件限制，不支持。
 - `sddm-nabu` 的 VT/session-reuse 补丁未合入；若出现 autologin 后切换用户黑屏，
   下一轮再 rebase 到 Fedora sddm 0.21。

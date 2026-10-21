@@ -100,6 +100,41 @@ assert_contains image/Containerfile "mkdir -p /out"
 assert_contains image/Containerfile "systemctl enable armada-uki-sync.service nabu-pmac.service nabu-tablet-mode.service"
 assert_not_contains image/Containerfile "qcom/sm8150/Xiaomi"
 
+# --- second round: sensors + iris -----------------------------------------
+assert_file image/nabu/userspace/build.sh
+assert_file image/nabu/sensors/patches/0001-report-handler-lifecycle-fixes.patch
+assert_file image/nabu/sensors/patches/0001-fix-ssc-race-condition.patch
+assert_file image/nabu/sensors/patches/0002-ssc-proximity-nabu-sar-fallback.patch
+assert_file image/nabu/iris/patches/0001-vaapi-support-vaAcquireBufferHandle-and-default-expo.patch
+assert_file system_files/usr/bin/hexagonrpcd
+assert_file system_files/usr/libexec/nabu-sensors-recover
+assert_file system_files/usr/lib/systemd/system-sleep/nabu-sensors-resume.sh
+assert_file system_files/usr/lib/systemd/system/hexagonrpcd.service
+assert_file system_files/usr/lib/systemd/system/hexagonrpcd.service.d/nabu-slpi-hexagonrpcd.conf
+assert_file system_files/usr/lib/systemd/system/iio-sensor-proxy.service.d/nabu-ssc.conf
+assert_file system_files/usr/lib/systemd/user/nabu-autobrightness.service
+assert_file system_files/usr/bin/nabu-autobrightness
+assert_file system_files/usr/lib/udev/rules.d/60-hexagonrpcd.rules
+assert_file system_files/usr/lib/udev/rules.d/90-nabu-ssc-accelerometer.rules
+assert_file system_files/usr/lib/udev/rules.d/99-iris-dmaheap.rules
+assert_file system_files/usr/lib/modprobe.d/99-iris-vaapi.conf
+assert_file system_files/usr/share/qcom/sm8150/xiaomi/nabu/sensors/registry/lsm6dso_0_platform.md
+assert_file system_files/usr/share/qcom/sm8150/xiaomi/nabu/socinfo/soc_id
+assert_contains image/Containerfile "nabu-userspace-build"
+assert_contains image/Containerfile "COPY --from=nabu-userspace-build /out/ /"
+assert_contains image/Containerfile "qrtr-ns.service"
+assert_contains image/Containerfile "/lib/firmware/hexagonfs"
+assert_contains image/Containerfile "systemctl --global enable nabu-autobrightness.service"
+assert_contains image/Containerfile "getent passwd fastrpc"
+assert_contains image/Containerfile "protobuf-c-compiler"
+assert_contains image/nabu/userspace/build.sh "libssc"
+assert_contains image/nabu/userspace/build.sh "qrtr-ns=enabled"
+assert_contains image/nabu/userspace/build.sh "ssc-support=enabled"
+assert_contains image/nabu/userspace/build.sh "b0ef8f7512321d36d52e4a1a52fd3eb0eec9a107"
+assert_contains build_files/10-base-packages.sh "libva-utils"
+assert_contains ci/nabu/kernel.required "CONFIG_VIDEO_QCOM_IRIS=m"
+assert_contains ci/nabu/kernel.required "CONFIG_QCOM_FASTRPC=m"
+
 # --- Plasma / SDDM config layer -------------------------------------------
 assert_file system_files/etc/skel/.config/kwinoutputconfig.json
 assert_contains system_files/etc/skel/.config/kwinoutputconfig.json '"connectorName": "DSI-1"'

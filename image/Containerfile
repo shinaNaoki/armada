@@ -7,6 +7,22 @@ RUN dnf -y install gcc kernel-headers && dnf clean all
 COPY image/nabu/tablet-mode/nabu-tablet-mode.c /src/nabu-tablet-mode.c
 RUN mkdir -p /out && gcc -O2 -Wall -Wextra /src/nabu-tablet-mode.c -o /out/nabu-tablet-mode
 
+# Build the sensor stack and iris-vaapi. Fedora has no libssc/hexagonrpc
+# packages and its qrtr build disables qrtr-ns, so these are built from the
+# same pinned sources as the reference nabu packages.
+FROM ${BASE} AS nabu-userspace-build
+RUN dnf -y install --setopt=install_weak_deps=False \
+        gcc gcc-c++ make meson ninja-build pkgconf-pkg-config patch \
+        curl tar xz findutils \
+        glib2-devel libqmi-devel protobuf-c protobuf-c-devel protobuf-c-compiler \
+        gobject-introspection-devel libgudev-devel polkit-devel \
+        systemd-devel libzstd-devel libva-devel libdrm-devel vulkan-headers \
+    && dnf clean all
+COPY image/nabu/sensors /src/nabu/sensors
+COPY image/nabu/iris /src/nabu/iris
+COPY image/nabu/userspace/build.sh /src/build.sh
+RUN bash /src/build.sh
+
 FROM ${BASE}
 
 # UKI generation on-device (OTA/rollback) + ext4/nabu tweaks.
@@ -30,6 +46,9 @@ COPY image/firmware/ /usr/lib/firmware/
 # VPU/iris: SM8150 Iris1 needs fw-boot + cached capture.
 COPY image/qcom-iris.conf /etc/modprobe.d/qcom-iris.conf
 
+# Sensor stack and iris-vaapi built in the disposable stage above.
+COPY --from=nabu-userspace-build /out/ /
+
 # nabu tablet-mode switch (keyboard/lid based) + tray toggle.
 COPY --from=nabu-tablet-build /out/nabu-tablet-mode /usr/libexec/nabu-tablet-mode
 COPY image/nabu/tablet-mode/nabu-tablet-mode.service /usr/lib/systemd/system/nabu-tablet-mode.service
@@ -37,9 +56,36 @@ COPY image/nabu/tablet-mode/nabu-tablet-mode.conf /etc/nabu-tablet-mode.conf
 COPY image/nabu/tablet-mode/nabu-tablet-toggle /usr/bin/nabu-tablet-toggle
 COPY image/nabu/tablet-mode/nabu-tablet-toggle.desktop /usr/share/applications/nabu-tablet-toggle.desktop
 
+# The sensor stack runs as the fastrpc system user (the reference package
+# creates it in its install script; the image has to do the same).
+RUN getent group fastrpc >/dev/null 2>&1 || groupadd --system fastrpc; \
+    getent passwd fastrpc >/dev/null 2>&1 || \
+    useradd --system --gid fastrpc --home-dir /run/fastrpc --shell /sbin/nologin fastrpc
+
+# hexagonrpcd serves the SLPI sensor config/registry from /lib/firmware/hexagonfs.
+RUN install -d -o fastrpc -g fastrpc /usr/lib/firmware/hexagonfs \
+ && cp -a /usr/share/qcom/sm8150/xiaomi/nabu/sensors \
+          /usr/share/qcom/sm8150/xiaomi/nabu/socinfo \
+          /usr/lib/firmware/hexagonfs/ \
+ && chown -R fastrpc:fastrpc /usr/lib/firmware/hexagonfs \
+ && ln -sfn ../../../../hexagonfs/sensors \
+        /usr/lib/firmware/qcom/sm8150/xiaomi/nabu/sensors \
+ && ln -sfn ../../../../hexagonfs/socinfo \
+        /usr/lib/firmware/qcom/sm8150/xiaomi/nabu/socinfo \
+ && install -d -o root -g root -m 0700 /var/lib/tqftpserv/sensors/registry \
+ && install -d -o root -g root -m 0700 /var/lib/rmtfs
+
 RUN chmod 0755 /usr/libexec/armada/armada-uki-update /usr/libexec/armada/armada-uki-finalize \
  && chmod 0755 /usr/libexec/nabu-tablet-mode /usr/bin/nabu-tablet-toggle \
  && rm -f /usr/lib/systemd/system/ostree-finalize-staged.service.d/10-armada-bootimg.conf
 
-RUN systemctl enable armada-uki-sync.service nabu-pmac.service nabu-tablet-mode.service || true
+# New libssc/libqrtr/libhexagonrpc libraries come from the build stage.
+RUN ldconfig
+
+RUN systemctl enable armada-uki-sync.service nabu-pmac.service nabu-tablet-mode.service \
+        qrtr-ns.service rmtfs.service rmtfs-dir.service tqftpserv.service \
+        hexagonrpcd.service hexagonrpcd-suspend.service hexagonrpcd-resume.service \
+ && systemctl --global enable nabu-autobrightness.service
+# iio-sensor-proxy ships no [Install] section; the 90-nabu-ssc-accelerometer
+# udev rule starts it with SYSTEMD_WANTS when fastrpc-sdsp appears.
 RUN systemctl mask armada-bootimg-sync.service armada-esp-rename.service || true

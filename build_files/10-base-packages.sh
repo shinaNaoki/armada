@@ -67,11 +67,14 @@ pkgs=(
     wireplumber
 
     # Graphics - see 12-armada-packages.sh for mesa
+    libva
+    libva-utils
     openal-soft
     SDL2_gfx
     SDL2_image
     SDL2_ttf
     sdl2-compat
+    v4l-utils
     vulkan-loader
     vulkan-tools
 
