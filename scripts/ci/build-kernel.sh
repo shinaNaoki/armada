@@ -1,117 +1,206 @@
 #!/bin/bash
-# Build the nabu (SM8150) 7.2.6 kernel in Armada's expected tarball layout:
-#   lib/modules/<kver>/{vmlinuz,modules...,dtb/qcom/sm8150-xiaomi-nabu.dtb}
+# Build the Xiaomi Pad 5 (SM8150) kernel from Kumar-Jy's nabu/7.2.y branch and
+# repackage it in the tarball layout build_files/20-install-kernel.sh expects:
 #
-# Source of truth: the 11-patch forward-port in ci/nabu-kernel/ (from
-# /home/user/workspace/7.2.6-nabu-port), applied to pristine linux-7.2.6.
-# Verified on the tablet with the same patch chain (display/touch/charging).
+#   lib/modules/<kver>/vmlinuz
+#   lib/modules/<kver>/modules...
+#   lib/modules/<kver>/dtb/qcom/sm8150-xiaomi-nabu.dtb
 #
-# Usage (from repo root, on aarch64):
+# The device configuration comes from nabu_defconfig; ci/nabu/kernel.config
+# adds only the generic Armada (bootc/SELinux/BTF/scx/zram/netfilter) options.
+# The source is pinned to a commit so a moving branch cannot silently change the
+# image.
+#
+# Usage (from repo root):
 #   ./scripts/ci/build-kernel.sh
+#
 # Environment:
-#   KERNEL_VER=7.2.6
-#   JOBS=<n>            default: nproc
-#   SKIP_DOWNLOAD=1     reuse an already extracted linux-<ver> tree
+#   KERNEL_REPO      default https://github.com/Kumar-Jy/linux
+#   KERNEL_BRANCH    default nabu/7.2.y
+#   KERNEL_REF       default 739161a890128f23bd1aa679d8754a9ea299269e
+#   KERNEL_VER       default 7.2.11
+#   LOCALVERSION     default -sm8150-nabu-1
+#   JOBS             default nproc
+#   KERNEL_WORK      default <repo>/.ci-kernel
+#   KERNEL_SRC_DIR   reuse an existing checkout (skips clone/fetch)
+#   OUT_DIR          default <repo>/out
+#   VERIFY_ONLY=1    stop after config merge + required-symbol verification
 set -euo pipefail
 
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
-work=${KERNEL_WORK:-$repo/.ci-kernel}
-out=$repo/out
-KERNEL_VER=${KERNEL_VER:-7.2.6}
+KERNEL_REPO=${KERNEL_REPO:-https://github.com/Kumar-Jy/linux}
+KERNEL_BRANCH=${KERNEL_BRANCH:-nabu/7.2.y}
+KERNEL_REF=${KERNEL_REF:-739161a890128f23bd1aa679d8754a9ea299269e}
+KERNEL_VER=${KERNEL_VER:-7.2.11}
+LOCALVERSION=${LOCALVERSION:--sm8150-nabu-1}
 JOBS=${JOBS:-$(nproc)}
-KVER="${KERNEL_VER}-sm8150-726-1"
-EXTRA="-sm8150-726-1"
-assets="$repo/ci/nabu-kernel"
+WORK_DIR=${KERNEL_WORK:-$repo/.ci-kernel}
+OUT_DIR=${OUT_DIR:-$repo/out}
+FRAGMENT=$repo/ci/nabu/kernel.config
+REQUIRED=$repo/ci/nabu/kernel.required
+DTB=sm8150-xiaomi-nabu.dtb
 
 log() { printf '==> %s\n' "$*"; }
+die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
-[ -d "$assets/patches" ] || { echo "missing $assets/patches" >&2; exit 1; }
+[ -f "$FRAGMENT" ] || die "missing $FRAGMENT"
+[ -f "$REQUIRED" ] || die "missing $REQUIRED"
+for tool in git make pahole; do
+    command -v "$tool" >/dev/null 2>&1 ||
+        die "missing build tool: $tool (pahole is needed for DEBUG_INFO_BTF/SCHED_CLASS_EXT)"
+done
+
 case "$(uname -m)" in
-    aarch64|arm64) make_opts=(ARCH=arm64) ;;
-    *)             make_opts=(ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-) ;;
+    aarch64|arm64)
+        make_opts=(ARCH=arm64)
+        ;;
+    x86_64)
+        command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 ||
+            die "aarch64-linux-gnu-gcc not found (install gcc-aarch64-linux-gnu)"
+        make_opts=(ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-)
+        export CROSS_COMPILE=aarch64-linux-gnu-
+        ;;
+    *)
+        die "unsupported build host: $(uname -m)"
+        ;;
 esac
 
-mkdir -p "$work" "$out"
-cd "$work"
+mkdir -p "$WORK_DIR" "$OUT_DIR"
+export ARCH=arm64
 
-if [ ! -d "linux-$KERNEL_VER" ]; then
-    if [ ! -f "linux-$KERNEL_VER.tar.xz" ]; then
-        log "downloading linux-$KERNEL_VER.tar.xz"
-        curl -fL --retry 3 -o "linux-$KERNEL_VER.tar.xz" \
-            "https://cdn.kernel.org/pub/linux/kernel/v${KERNEL_VER%%.*}.x/linux-$KERNEL_VER.tar.xz"
+# ---------- 1. Source checkout (pinned) ----------
+SRC_DIR=${KERNEL_SRC_DIR:-$WORK_DIR/linux-nabu}
+if [ -n "${KERNEL_SRC_DIR:-}" ]; then
+    [ -d "$SRC_DIR/.git" ] || die "KERNEL_SRC_DIR=$SRC_DIR is not a git checkout"
+    log "using existing kernel source at $SRC_DIR"
+else
+    if [ ! -d "$SRC_DIR/.git" ]; then
+        log "cloning $KERNEL_REPO ($KERNEL_BRANCH)"
+        git init -q "$SRC_DIR"
+        git -C "$SRC_DIR" remote add origin "$KERNEL_REPO"
     fi
-    log "extracting"
-    tar -xf "linux-$KERNEL_VER.tar.xz"
+    log "fetching $KERNEL_BRANCH"
+    git -C "$SRC_DIR" fetch --depth 1 origin "refs/heads/$KERNEL_BRANCH"
+    git -C "$SRC_DIR" checkout -q --detach FETCH_HEAD
 fi
 
-cd "linux-$KERNEL_VER"
+actual_ref=$(git -C "$SRC_DIR" rev-parse HEAD)
+[ "$actual_ref" = "$KERNEL_REF" ] ||
+    die "kernel source is $actual_ref, expected pinned $KERNEL_REF; update KERNEL_REF deliberately"
 
-log "applying 14 nabu forward-port patches"
-apply() { patch -Np1 -i "$assets/patches/$1"; }
-apply 0001-sm8150-dtsi-add-slim-sound.patch
-apply 0002-drm-panel-nt36523-add-nabu.patch
-apply 0003-asoc-qcom-add-sm8150-sndcard.patch
-apply 0004-arm64-dts-qcom-nabu-726-forward-port-fixes.patch
-apply 0005-input-touchscreen-nt36523-spi.patch
-apply 0006-display-fixes-7.2.6.patch
-apply 0007-dispcc-sm8150-revert-ops-parent-enable.patch
-apply 0008-dsi-phy-7nm-fix-bonded-pll-init.patch
-apply 0010-power-supply-nabu-charging-drivers.patch
-apply 0011-power-supply-qcom-smbx-add-pm8150b-smb5.patch
-apply 0012-media-iris-sm8150-port.patch
-apply 0013-clk-videocc-sm8150-hw-ctrl-trigger.patch
+source_ver=$(sed -n 's/^SUBLEVEL = //p' "$SRC_DIR/Makefile" | head -1)
+major=$(sed -n 's/^VERSION = //p' "$SRC_DIR/Makefile" | head -1)
+patchlevel=$(sed -n 's/^PATCHLEVEL = //p' "$SRC_DIR/Makefile" | head -1)
+[ "$major.$patchlevel.$source_ver" = "$KERNEL_VER" ] ||
+    die "source is $major.$patchlevel.$source_ver, expected KERNEL_VER=$KERNEL_VER"
+log "kernel source: $actual_ref ($KERNEL_VER)"
 
-log "installing nabu board DTS"
-install -m644 "$assets/dts/sm8150-xiaomi-nabu.dts" arch/arm64/boot/dts/qcom/
-install -m644 "$assets/dts/sm8150-wcd9340.dtsi" arch/arm64/boot/dts/qcom/
-apply 0009-arm64-dts-nabu-charging-nodes.patch
-apply 0014-arm64-dts-nabu-iris-vpu.patch
+cd "$SRC_DIR"
 
-grep -q 'sm8150-xiaomi-nabu.dtb' arch/arm64/boot/dts/qcom/Makefile ||
-    echo 'dtb-$(CONFIG_ARCH_QCOM) += sm8150-xiaomi-nabu.dtb' >> arch/arm64/boot/dts/qcom/Makefile
-# Avoid unrelated/possibly broken SM8150 boards breaking `dtbs`.
-sed -i '/^dtb-\$(CONFIG_ARCH_QCOM) += sm8150-xiaomi-raphael.dtb/s/^/#/' \
-    arch/arm64/boot/dts/qcom/Makefile
+# ---------- 2. Configuration ----------
+log "generating nabu_defconfig"
+make "${make_opts[@]}" nabu_defconfig >/dev/null
 
-log "configuring (device 7.0 config + nabu additions)"
-cp "$assets/config/nabu-7.0-running.config" .config
-cat "$assets/config/nabu-kernel-additions.config" >> .config
-sed -i '/^CONFIG_LOCALVERSION=/d' .config
-# Armada needs SELinux; make sure this never silently disappears.
-grep -q '^CONFIG_SECURITY_SELINUX=y' .config || echo 'CONFIG_SECURITY_SELINUX=y' >> .config
-grep -q '^CONFIG_SECURITY_SELINUX_BOOTPARAM=y' .config || echo 'CONFIG_SECURITY_SELINUX_BOOTPARAM=y' >> .config
-grep -q '^CONFIG_IKCONFIG_PROC=y' .config || echo 'CONFIG_IKCONFIG_PROC=y' >> .config
-make "${make_opts[@]}" olddefconfig
+log "merging ci/nabu/kernel.config"
+frag=$(mktemp)
+trap 'rm -f "${frag:-}"' EXIT
+# kconfig's conf cannot parse trailing inline comments on assignments.
+sed -E '/^[[:space:]]*CONFIG_[A-Z0-9_]+=/ s/[[:space:]]*#.*$//' "$FRAGMENT" > "$frag"
+bash scripts/kconfig/merge_config.sh .config "$frag"
 
-missing=()
-for sym in DRM_MSM SND_SOC_SM8150 SLIMBUS SLIM_QCOM_NGD_CTRL SND_SOC_WCD934X \
-           SND_SOC_CS35L41 SND_SOC_CS35L41_I2C DRM_PANEL_NOVATEK_NT36523 \
-           BACKLIGHT_KTZ8866 QCOM_APR TOUCHSCREEN_NT36523_SPI SECURITY_SELINUX; do
-    val=$(sed -n "s/^CONFIG_${sym}=//p" .config)
-    [[ $val == y || $val == m ]] || missing+=("CONFIG_${sym}")
-done
-if ((${#missing[@]})); then
-    printf 'ERROR: required config symbols missing after olddefconfig: %s\n' "${missing[*]}" >&2
-    exit 1
+# merge_config.sh skips lines starting with '#'; force the one symbol we need
+# disabled (BTF requires unreduced debug info).
+if [ -x scripts/config ]; then
+    scripts/config --disable DEBUG_INFO_REDUCED
+else
+    sed -i 's/^CONFIG_DEBUG_INFO_REDUCED=y/# CONFIG_DEBUG_INFO_REDUCED is not set/' .config
 fi
 
-log "building Image + modules + nabu DTB (-j$JOBS)"
-make "${make_opts[@]}" EXTRAVERSION="$EXTRA" LOCALVERSION= -j"$JOBS" \
-    Image modules qcom/sm8150-xiaomi-nabu.dtb
+make "${make_opts[@]}" olddefconfig >/dev/null
 
-log "staging Armada kernel tarball layout"
-stage="$work/stage-$KVER"
-rm -rf "$stage"
-install -d "$stage/lib/modules/$KVER/dtb/qcom"
-install -m644 arch/arm64/boot/Image "$stage/lib/modules/$KVER/vmlinuz"
-make "${make_opts[@]}" EXTRAVERSION="$EXTRA" LOCALVERSION= \
-    INSTALL_MOD_PATH="$stage" INSTALL_MOD_STRIP=1 modules_install >/dev/null
-rm -f "$stage/lib/modules/$KVER/build" "$stage/lib/modules/$KVER/source"
-install -m644 arch/arm64/boot/dts/qcom/sm8150-xiaomi-nabu.dtb \
-    "$stage/lib/modules/$KVER/dtb/qcom/"
+# ---------- 3. Verify required symbols ----------
+verify_required() {
+    local line sym want actual failed=0
+    while IFS= read -r line; do
+        case "$line" in
+            ''|\#*) continue ;;
+        esac
+        sym=${line%%=*}
+        want=${line#*=}
+        actual=$(grep -m1 "^${sym}=" .config 2>/dev/null | cut -d= -f2- || true)
+        if [ "$want" = "n" ]; then
+            if [ -n "$actual" ] && [ "$actual" != "n" ]; then
+                printf 'ERROR: %s is %s, expected disabled\n' "$sym" "$actual" >&2
+                failed=1
+            fi
+            continue
+        fi
+        if [ "$actual" != "$want" ]; then
+            printf 'ERROR: %s is %s, expected %s\n' "$sym" "${actual:-<unset>}" "$want" >&2
+            failed=1
+        fi
+    done < "$REQUIRED"
+    return "$failed"
+}
 
+verify_required || die "required kernel configuration is incomplete (see above)"
+
+if [ "${VERIFY_ONLY:-0}" = "1" ]; then
+    log "VERIFY_ONLY=1: config merged and required symbols verified"
+    exit 0
+fi
+
+command -v bc >/dev/null 2>&1 || die "missing build tool: bc"
+
+# ---------- 4. Build ----------
+KVER=$(make "${make_opts[@]}" LOCALVERSION="$LOCALVERSION" -s kernelrelease)
+case "$KVER" in
+    "$KERNEL_VER"-*) ;;
+    *) die "unexpected kernelrelease '$KVER' (expected ${KERNEL_VER}-...)" ;;
+esac
+log "kernel release: $KVER"
+
+log "building Image + modules + $DTB (-j$JOBS)"
+make "${make_opts[@]}" LOCALVERSION="$LOCALVERSION" -j"$JOBS" \
+    Image modules "qcom/$DTB"
+
+# ---------- 5. Stage Armada tarball layout ----------
+STAGE=$WORK_DIR/stage-$KVER
+rm -rf "$STAGE"
+install -d "$STAGE/lib/modules/$KVER/dtb/qcom"
+install -m644 arch/arm64/boot/Image "$STAGE/lib/modules/$KVER/vmlinuz"
+
+make "${make_opts[@]}" LOCALVERSION="$LOCALVERSION" \
+    INSTALL_MOD_PATH="$STAGE" INSTALL_MOD_STRIP=1 modules_install >/dev/null
+rm -f "$STAGE/lib/modules/$KVER/build" "$STAGE/lib/modules/$KVER/source"
+
+dtb_src="arch/arm64/boot/dts/qcom/$DTB"
+[ -f "$dtb_src" ] || die "DTB was not built: $dtb_src"
+install -m644 "$dtb_src" "$STAGE/lib/modules/$KVER/dtb/qcom/$DTB"
+
+cat > "$STAGE/lib/modules/$KVER/.armada-source" <<EOF
+Source: $KERNEL_REPO ($KERNEL_BRANCH)
+Commit: $KERNEL_REF
+Version: $KERNEL_VER
+Config: nabu_defconfig + ci/nabu/kernel.config
+Built: armada-builder on $(uname -m)
+Repackaged for: armada
+EOF
+
+# ---------- 6. Package ----------
 name="armada-kernel-$KVER.tar.zst"
-tar --owner=0 --group=0 -C "$stage" -cf - lib | zstd -q -T0 -10 -f -o "$out/$name"
-( cd "$out" && sha256sum "$name" > "$name.sha256" )
-log "kernel package: $out/$name ($(du -h "$out/$name" | cut -f1))"
-cat "$out/$name.sha256"
+log "packing $OUT_DIR/$name"
+tar --owner=0 --group=0 -C "$STAGE" -cf - lib | zstd -q -T0 -10 -f -o "$OUT_DIR/$name"
+( cd "$OUT_DIR" && sha256sum "$name" > "$name.sha256" )
+
+# Verify the archive without a SIGPIPE-prone `tar | grep -q` pipeline.
+listing=$(mktemp)
+tar --zstd -tf "$OUT_DIR/$name" > "$listing"
+grep -qx "lib/modules/$KVER/dtb/qcom/$DTB" "$listing" ||
+    die "tarball is missing lib/modules/$KVER/dtb/qcom/$DTB"
+grep -qx "lib/modules/$KVER/vmlinuz" "$listing" ||
+    die "tarball is missing lib/modules/$KVER/vmlinuz"
+rm -f "$listing"
+
+log "done: $OUT_DIR/$name ($(du -h "$OUT_DIR/$name" | cut -f1))"
+cat "$OUT_DIR/$name.sha256"
