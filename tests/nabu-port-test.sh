@@ -90,6 +90,7 @@ assert_file system_files/usr/lib/systemd/network/10-wlan.link
 assert_file image/nabu/tablet-mode/nabu-tablet-mode.c
 assert_file image/nabu/tablet-mode/nabu-tablet-mode.service
 assert_contains image/Containerfile "nabu-tablet-build"
+assert_contains image/Containerfile "mkdir -p /out"
 assert_contains image/Containerfile "systemctl enable armada-uki-sync.service nabu-pmac.service nabu-tablet-mode.service"
 assert_not_contains image/Containerfile "qcom/sm8150/Xiaomi"
 

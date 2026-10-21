@@ -5,7 +5,7 @@ ARG BASE=localhost/armada:latest
 FROM ${BASE} AS nabu-tablet-build
 RUN dnf -y install gcc kernel-headers && dnf clean all
 COPY image/nabu/tablet-mode/nabu-tablet-mode.c /src/nabu-tablet-mode.c
-RUN gcc -O2 -Wall -Wextra /src/nabu-tablet-mode.c -o /out/nabu-tablet-mode
+RUN mkdir -p /out && gcc -O2 -Wall -Wextra /src/nabu-tablet-mode.c -o /out/nabu-tablet-mode
 
 FROM ${BASE}
 
