@@ -191,6 +191,11 @@ UKI 的 DTB 解析顺序（`prepare-rootfs.sh` 与设备端 `armada-uki-update` 
 手动触发：Actions → **nabu Armada image** → Run workflow → 分支 `main`
 （或 `nabu`）；`kernel_ref` 留空即使用固定 commit。失败时把 job 日志贴回来。
 
+如果只想重跑 image（例如只改了传感器/iris 构建），把上一次 kernel job 成功的
+run ID 填到 `kernel_run_id`：kernel job 会被跳过，image job 用
+`gh run download` 取回该 run 的 `armada-kernel-nabu-*` artifact，避免每次
+重编 1–2 小时的内核。留空则照常重建内核。
+
 `nabu-bib-debug.yml` 可在镜像已推送后只重跑 BIB 部分，节省内核/rootfs 时间。
 
 ## 8. 安装
