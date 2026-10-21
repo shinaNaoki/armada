@@ -1,4 +1,12 @@
 ARG BASE=localhost/armada:latest
+
+# Build the nabu tablet-mode daemon outside the final image so gcc does not
+# leak into the rootfs.
+FROM ${BASE} AS nabu-tablet-build
+RUN dnf -y install gcc && dnf clean all
+COPY image/nabu/tablet-mode/nabu-tablet-mode.c /src/nabu-tablet-mode.c
+RUN gcc -O2 -Wall -Wextra /src/nabu-tablet-mode.c -o /out/nabu-tablet-mode
+
 FROM ${BASE}
 
 # UKI generation on-device (OTA/rollback) + ext4/nabu tweaks.
@@ -14,22 +22,24 @@ COPY image/armada-uki-finalize /usr/libexec/armada/armada-uki-finalize
 COPY image/armada-uki-sync.service /usr/lib/systemd/system/armada-uki-sync.service
 COPY image/10-armada-uki.conf /usr/lib/systemd/system/ostree-finalize-staged.service.d/10-armada-uki.conf
 COPY image/uki-dtb /usr/lib/armada/uki-dtb
-# nabu firmware (pmOS xiaomi-nabu-firmware): GPU, ADSP/CDSP, modem, venus,
+# nabu firmware (pmOS xiaomi-nabu-firmware): GPU, ADSP/CDSP/SLPI, modem, venus,
 # WLAN, CS35L41 speaker amps, Novatek touch.  Fedora's linux-firmware does not
 # carry the nabu-specific blobs.
 COPY image/firmware/ /usr/lib/firmware/
 
-# VPU/iris: SM8150 Iris1 needs fw-boot + cached capture, and the DT asks for
-# the lowercase qcom/sm8150/xiaomi/nabu/venus.mbn path.
+# VPU/iris: SM8150 Iris1 needs fw-boot + cached capture.
 COPY image/qcom-iris.conf /etc/modprobe.d/qcom-iris.conf
-RUN if [ -f /usr/lib/firmware/qcom/sm8150/Xiaomi/nabu/venus.mbn ] && \
-       [ ! -e /usr/lib/firmware/qcom/sm8150/xiaomi/nabu/venus.mbn ]; then \
-        mkdir -p /usr/lib/firmware/qcom/sm8150/xiaomi/nabu && \
-        ln -s ../../Xiaomi/nabu/venus.mbn /usr/lib/firmware/qcom/sm8150/xiaomi/nabu/venus.mbn; \
-    fi
+
+# nabu tablet-mode switch (keyboard/lid based) + tray toggle.
+COPY --from=nabu-tablet-build /out/nabu-tablet-mode /usr/libexec/nabu-tablet-mode
+COPY image/nabu/tablet-mode/nabu-tablet-mode.service /usr/lib/systemd/system/nabu-tablet-mode.service
+COPY image/nabu/tablet-mode/nabu-tablet-mode.conf /etc/nabu-tablet-mode.conf
+COPY image/nabu/tablet-mode/nabu-tablet-toggle /usr/bin/nabu-tablet-toggle
+COPY image/nabu/tablet-mode/nabu-tablet-toggle.desktop /usr/share/applications/nabu-tablet-toggle.desktop
 
 RUN chmod 0755 /usr/libexec/armada/armada-uki-update /usr/libexec/armada/armada-uki-finalize \
+ && chmod 0755 /usr/libexec/nabu-tablet-mode /usr/bin/nabu-tablet-toggle \
  && rm -f /usr/lib/systemd/system/ostree-finalize-staged.service.d/10-armada-bootimg.conf
 
-RUN systemctl enable armada-uki-sync.service || true
+RUN systemctl enable armada-uki-sync.service nabu-pmac.service nabu-tablet-mode.service || true
 RUN systemctl mask armada-bootimg-sync.service armada-esp-rename.service || true

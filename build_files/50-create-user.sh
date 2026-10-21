@@ -21,6 +21,13 @@ install -Dpm 0755 -o armada -g armada \
 cp -af /etc/skel/. /var/home/armada/
 chown -R armada:armada /var/home/armada
 
+# The SDDM greeter needs the same nabu panel geometry/rotation and virtual
+# keyboard configuration as the desktop user.
+install -d -m 0700 -o sddm -g sddm /var/lib/sddm/.config
+install -m 0644 -o sddm -g sddm /etc/skel/.config/kwinoutputconfig.json /var/lib/sddm/.config/
+install -m 0644 -o sddm -g sddm /etc/skel/.config/kwinrc /var/lib/sddm/.config/
+chown -R sddm:sddm /var/lib/sddm/.config
+
 echo 'armada:armada' | chpasswd
 
 cat > /etc/sudoers.d/armada-user <<'EOF'

@@ -40,10 +40,13 @@ pkgs=(
     gdisk
     git
     htop
+    iproute
     jq
+    libnotify
     lsb_release
     lsof
     parted
+    psmisc
     python-unversioned-command
     python3-gobject
     python3-websocket-client
@@ -161,6 +164,7 @@ desktop_pkgs=(
     kio-extras
     libadwaita
     libdbusmenu-gtk3
+    plasma-keyboard
     qt6-qttools
     qt6-qtvirtualkeyboard
     xorg-x11-server-Xwayland
