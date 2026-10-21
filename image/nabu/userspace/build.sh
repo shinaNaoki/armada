@@ -65,11 +65,16 @@ fetch "https://github.com/linux-msm/qrtr/archive/${QRTR_REF}.tar.gz" qrtr
 extract qrtr qrtr
 cd "$WORK/qrtr"
 meson setup build --prefix=/usr --libdir=/usr/lib64 --buildtype=release \
-    -Dqrtr-ns=enabled -Dsystemd-service=enabled \
-    -Dsystemd-unit-prefix=/usr/lib/systemd/system
+    -Dqrtr-ns=enabled -Dsystemd-service=disabled
 ninja -C build
 DESTDIR="$OUT" meson install -C build
 meson install -C build
+# Fedora's systemd-devel only provides libsystemd.pc (not systemd.pc), so
+# qrtr's dependency('systemd') cannot find the unit dir. Install the same
+# unit manually from the source template.
+install -d "$OUT/usr/lib/systemd/system"
+sed 's|@prefix@|/usr|g' src/qrtr-ns.service.in \
+    > "$OUT/usr/lib/systemd/system/qrtr-ns.service"
 
 # --- rmtfs ----------------------------------------------------------------
 fetch "https://github.com/linux-msm/rmtfs/archive/refs/tags/v${RMTFS_VERSION}.tar.gz" rmtfs
@@ -85,7 +90,8 @@ make DESTDIR="$OUT" prefix=/usr install
 fetch "https://github.com/linux-msm/tqftpserv/archive/refs/tags/v${TQFTPSERV_VERSION}.tar.gz" tqftpserv
 extract tqftpserv tqftpserv
 cd "$WORK/tqftpserv"
-meson setup build --prefix=/usr --libdir=/usr/lib64 --buildtype=release
+meson setup build --prefix=/usr --libdir=/usr/lib64 --buildtype=release \
+    -Dsystemd-unit-prefix=/usr/lib/systemd/system
 ninja -C build
 DESTDIR="$OUT" meson install -C build
 
