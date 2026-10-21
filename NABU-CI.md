@@ -1,145 +1,220 @@
-# ArmadaOS for nabu (SM8150)：GitHub Actions 构建 rootfs + UKI
+# ArmadaOS for nabu (Xiaomi Pad 5 / SM8150)
 
-> 目标：在 **公开 fork** 的 arm64 GitHub Runner（免费 4 vCPU）上构建
-> 1) 可 `dd` 到 nabu `linux` 分区的 **ext4 rootfs 镜像**（含 ostree 部署、内核模块、固件、/boot）
-> 2) 可直接拷到 ESP 的 **UKI**（`EFI/armadaOS/armada-<kver>.efi`）
-> 内核用你已验证的 **7.2.6 + 11 个 nabu 补丁**（`ci/nabu-kernel/`），用户态是 ArmadaOS（Steam/FEX/Proton/gamescope/Plasma）。
+目标：把 ArmadaOS 移植到小米平板 5（`nabu`，SM8150），用 **Kumar-Jy 的 7.2.11
+内核**替换仓库里早期的 7.2.6 手工 forward-port，并通过 GitHub Actions 产出：
 
-## 0. 文件系统选择：推荐 ext4（评估结论）
+1. 可 `dd` 到 `linux` 分区的 **ext4 rootfs 镜像**（含 ostree 部署、内核模块、固件、`/boot`）；
+2. 可拷到 ESP 的 **UKI**（`EFI/armadaOS/armada-<kver>.efi`）。
 
-你担心「btrfs 的回滚 rEFInd 不支持」——**rEFInd 根本不读根文件系统**，它只加载 ESP 上的 UKI。bootc/ostree 的「回滚」是切换部署（BLS/`ostree=` 路径），不是 btrfs 快照；所以 **ext4 和 btrfs 都能 OTA/回滚**，与 rEFInd 无关。
+> 本分支（`nabu`）是核心硬件 + Plasma 配置层的第一版。传感器/自动旋转/自动亮度/
+> upower/相机/iris-vaapi/stylus-popup 留到后续分支迭代。
 
-选 **ext4** 的理由（本方案采用）：
-- 与你现有 fstab/分区方式一致：`PARTLABEL=linux / ext4 ...`，`x-systemd.growfs` 首启自动扩到 106 GiB；
-- 自制「rootfs 镜像 → dd」链路最简单：单一 ext4，不需要 subvol 处理；
-- ostree/bootc 在 ext4 上完全支持；
-- 代价：失去 btrfs 透明压缩/subvol；Armada 默认 kargs 里的 `rootflags=compress=zstd:1` 已在本方案中换成 `rootflags=noatime`。
+## 1. 参考与源码固定
 
-btrfs 仍可选（改 `image/fstab`、`ci/disk-nabu.toml`/BIB `--rootfs=btrfs`、kargs rootflags），但会把「merge /boot + subvol」变复杂，首轮不建议。
+| 项目 | 值 |
+| --- | --- |
+| 内核源码 | `https://github.com/Kumar-Jy/linux` |
+| 内核分支 | `nabu/7.2.y` |
+| 固定 commit | `739161a890128f23bd1aa679d8754a9ea299269e` |
+| 内核版本 | 7.2.11（`SUBLEVEL=11`） |
+| 基础配置 | `arch/arm64/configs/nabu_defconfig` |
+| DTB | `sm8150-xiaomi-nabu.dtb` |
+| 固件包 | `linux-firmware-xiaomi-nabu-25.04.26-1-any.pkg.tar.xz` |
+| 固件 SHA256 | `bef43c32029902bc4c3c1b7c7007c6e5d954fe673933087a836b5a41b567bac9` |
 
-## 1. 目录
+参考仓库：`Nabu-arch-images`（安装/UKI/Plasma 配置）与 `nabu-pkgs`（Arch 包、
+内核 PKGBUILD、固件、UCM、传感器包）。**不要**再使用旧的 `ci/nabu-kernel/`
+补丁链。
+
+## 2. 目录
 
 ```
-.github/workflows/nabu-image.yml   # 全部构建流程（手动触发）
-scripts/ci/build-kernel.sh         # 7.2.6 + 11 patch → armada-kernel-<kver>.tar.zst
-scripts/ci/prepare-rootfs.sh       # BIB ext4 raw → 合并 /boot → 改写 fstab/BLS → rootfs.img.gz + UKI
-image/Containerfile               # 在 Armada 镜像上加 fstab/hostname/kargs/UKI 钩子
-image/fstab                       # PARTLABEL=linux / ext4 + PARTLABEL=esp /boot/efi
-image/hostname                    # xiaomi-nabu
-image/10-armada-nabu.toml         # ext4 rootflags=noatime 等 kargs（覆盖 Armada 的 btrfs kargs）
-image/armada-uki-update           # OTA/回滚后重生成 /EFI/armadaOS/*.efi（ext4 版）
-image/armada-uki-finalize         # 失败自动 bootc rollback
-image/armada-uki-sync.service     # 关机钩子
-image/10-armada-uki.conf          # ostree-finalize-staged drop-in
-image/uki-dtb                     # sm8150-xiaomi-nabu
-ci/nabu-kernel/                   # 你的 11 个补丁 + DTS/dtsi + 7.0 config + additions
-ci/disk-nabu.toml                 # BIB root 16 GiB（首启 growfs 到整分区）
-apply-to-fork.sh                  # 把以上文件复制进你的 Armada fork
+ci/nabu/kernel.config          # armada 在 nabu_defconfig 之上的增量配置
+ci/nabu/kernel.required        # 构建后必须成立的符号清单
+ci/nabu/README.md              # 内核来源、配置理由、tarball 布局
+scripts/ci/build-kernel.sh     # 拉取固定 commit → 配置 → 编译 → 打 tar.zst
+scripts/ci/prepare-rootfs.sh   # BIB ext4 raw → 合并 /boot → fstab/BLS → UKI
+image/10-armada-nabu.toml      # ext4 + nabu kargs（覆盖 base 的 kargs.d）
+image/Containerfile            # 固件/UKI 钩子/tablet-mode 编译与安装
+image/firmware/                # nabu 专用固件（小写 qcom/sm8150/xiaomi/nabu）
+image/nabu/tablet-mode/        # 键盘/盖子驱动的 SW_TABLET_MODE 守护进程
+image/armada-uki-update        # OTA/回滚后重生成 UKI（含 DTB 回退）
+system_files/usr/share/alsa/ucm2/Xiaomi/nabu/       # 四扬声器 UCM
+system_files/usr/share/alsa/ucm2/conf.d/sm8150/     # 声卡匹配
+system_files/usr/share/pipewire/pipewire.conf.d/    # 扬声器保护滤波
+system_files/usr/bin/nabu-pmac-set                  # 由板序列号推导 Wi-Fi MAC
+system_files/etc/skel/.config/kwinoutputconfig.json # DSI-1 旋转/缩放/120Hz
+system_files/etc/skel/.config/kwinrc|plasmarc       # 虚拟键盘
+system_files/etc/sddm.conf.d/10-nabu.conf           # 保守的 greeter 配置
+.github/workflows/nabu-image.yml                    # kernel job + image job
+.github/workflows/nabu-bib-debug.yml                # 只重跑 BIB 的调试流程
 ```
 
-## 2. 应用到 fork
+## 3. 内核
+
+`scripts/ci/build-kernel.sh` 做以下事情：
+
+1. 在 `.ci-kernel/linux-nabu` 初始化仓库，浅取 `nabu/7.2.y`，校验 HEAD 等于
+   `KERNEL_REF`；分支移动会直接失败，必须显式更新 pin。
+2. `make ARCH=arm64 nabu_defconfig`。
+3. 用 `scripts/kconfig/merge_config.sh` 合并 `ci/nabu/kernel.config`，
+   关闭 `DEBUG_INFO_REDUCED`，`make olddefconfig`。
+4. 按 `ci/nabu/kernel.required` 逐项校验（SELinux/BTF/scx/EROFS/nabu 驱动等），
+   任何不匹配都会打印实际值并退出。
+5. 编译 `Image modules qcom/sm8150-xiaomi-nabu.dtb`，
+   `LOCALVERSION=-sm8150-nabu-1`，得到 `7.2.11-sm8150-nabu-1`。
+6. 暂存成 Armada 需要的布局并打包：
+   ```
+   lib/modules/<kver>/vmlinuz
+   lib/modules/<kver>/modules...
+   lib/modules/<kver>/dtb/qcom/sm8150-xiaomi-nabu.dtb
+   ```
+   输出 `out/armada-kernel-<kver>.tar.zst` + `.sha256`。
+
+`ci/nabu/kernel.config` 只放 **Armada 通用需求**：SELinux/LSM、bootc/ostree
+文件系统、BTF/tracing/scx、调度/内存、splash handoff、zram/crypto、netfilter、
+手柄输入。设备驱动完全来自 `nabu_defconfig`（参考内核已经带
+`QCOM_BMS`、`CHARGER_IDTP9418`、SLPI、iris 等），不再复制 7.2.6 的旧设备项。
+
+本地只验证配置（不需要 root）：
 
 ```bash
-cd /path/to/armada-nabu-ci
-./apply-to-fork.sh /path/to/your/armada-fork
-cd /path/to/your/armada-fork
-git add ci image scripts/ci .github/workflows/nabu-image.yml
-git commit -m "nabu: CI image with 7.2.6 kernel + ext4 rootfs/UKI"
-git push origin <branch>
+cd /home/user/workspace
+WORK=.work/linux-nabu
+git init -q "$WORK" && git -C "$WORK" remote add origin https://github.com/Kumar-Jy/linux
+git -C "$WORK" fetch --depth 1 origin refs/heads/nabu/7.2.y
+git -C "$WORK" checkout -q FETCH_HEAD
+test "$(git -C "$WORK" rev-parse HEAD)" = 739161a890128f23bd1aa679d8754a9ea299269e
+cd "$WORK"
+make ARCH=arm64 nabu_defconfig
+bash scripts/kconfig/merge_config.sh .config /home/user/workspace/armada/ci/nabu/kernel.config
+make ARCH=arm64 olddefconfig
 ```
 
-然后在 GitHub 上 **Actions → nabu Armada image → Run workflow**。
+## 4. 固件
 
-## 3. 工作流做了什么
+`image/firmware/` 已按参考固件包更新为小写路径：
 
-1. `ubuntu-24.04-arm`（公开仓库免费）装 podman/buildah/just/ukify 等；
-2. 下载 linux-7.2.6，按顺序应用 `ci/nabu-kernel/patches/0001..0014`（顺序与你的 PKGBUILD 完全一致：0012/0013 在 0011 后，0009 在装完 DTS 后，0014 在 0009 后），装 `sm8150-xiaomi-nabu.dts`/`sm8150-wcd9340.dtsi`；
-3. 用设备 7.0 config + `nabu-kernel-additions.config` 配内核，构建 `Image modules qcom/sm8150-xiaomi-nabu.dtb`；
-4. 打成 Armada 期望的 `armada-kernel-7.2.6-sm8150-726-1.tar.zst`，注册成 `localhost/armada/pkg/kernel:<hash>`；
-5. `just build` 组装 Armada rootfs：本地 kernel + 上游 GHCR 的其余 25 个包（不会重编 26 个包）；
-6. `podman build -f image/Containerfile` 生成 nabu 派生镜像：写 `/etc/fstab`、`/etc/hostname`、ext4 kargs，安装 `systemd-ukify` 和 UKI 钩子，mask 掉 ABL 的 `armada-bootimg-sync`/`armada-esp-rename`；
-7. 推送到 `ghcr.io/<你>/armada-nabu:nabu`（BIB 的 origin 指这里，`bootc upgrade` 才能用）；
-8. BIB 以 **ext4** 出 raw 盘 → 把 BIB 的 `/boot` 合并进 root 分区 → 改写 `/etc/fstab` 和 BLS `options`（`root=PARTLABEL=linux`、`rootflags=noatime`）→ 从合并后的 `/boot` 用 `ukify --devicetree` 生成 UKI → 导出 root 分区为 ext4 镜像、`e2fsck`/`resize2fs -M`/gzip；
-9. 上传 artifact：`armadaos-rootfs-YYYYMMDD.img.gz`、`EFI/armadaOS/armada-<kver>.efi`、`sha256sums.txt`、`install.txt`（+ 内核 tar 单独 artifact）。
+- `qcom/sm8150/xiaomi/nabu/{a640_zap.mbn,adsp.mbn,cdsp.mbn,modem.mbn,modemuw.jsn,slpi_nb.mbn,venus.mbn,wlanmdsp.mbn}`
+- `qcom/{a630_sqe.fw,a640_gmu.bin}`、`novatek/`、`cirrus/`、`qca/`
 
-> 内核策略说明：这是 **pristine 7.2.6 + nabu 11 patch**，不是 Armada 自带的「7.2.6 + 192 patch」内核。原因是两者冲突（Armada 已有 bonded-DSI PLL 修复 `0048b`、qcom 电源/显示补丁等，nabu 的 0007/0008/0010/0011 会重复或上下文冲突）。nabu 不需要 Armada 的掌机 HDR/输入/风扇补丁；先保证显示/触摸/充电/音频可用，后续再考虑合并 Armada 的 DPU 色彩补丁。
+旧的 `qcom/sm8150/Xiaomi/`（大写）在大小写敏感的内核固件加载器下会静默失败，
+已删除。`slpi_nb.mbn` 供 `&remoteproc_slpi` 使用；即使本分支不装传感器 daemon
+也保留。
 
-## 3.5 VPU / iris 硬件解码（pkgrel 7）
+## 5. 启动链
 
-- `0012` 把 7.0 上验证过的 nabu iris 驱动（legacy VPU5 + `sm8150_data`）前向移植到 7.2.6；
-- `0013` 让 `videocc-sm8150` 的 `venus_gdsc` 使用 `HW_CTRL_TRIGGER`；
-- `0014` 在 `sm8150.dtsi` 加 `video-codec@aa00000`（Iris1/VPU5、3 GDSC、7 clock/4 reset、SID 0x2300、6 OPP）并在 nabu DTS 中 `&venus` 使能；
-- `image/qcom-iris.conf` → `/etc/modprobe.d/qcom-iris.conf`（`allow_fw_boot=1 cached_capture=1`）；镜像还会在存在 `qcom/sm8150/Xiaomi/nabu/venus.mbn` 时补一个**小写** `xiaomi` 路径的符号链接（DT 里写的是小写）。
-- 该内核仍需 `CONFIG_VIDEO_QCOM_IRIS=m`（已加入 `nabu-kernel-additions.config`）；验证：`ls /dev/video*`、`dmesg | grep -i iris`、`v4l2-ctl --list-devices`。
+`image/10-armada-nabu.toml` 覆盖 `/usr/lib/bootc/kargs.d/10-armada.toml`：
 
-## 3.6 nabu 固件（已包含）
+- ext4 root：`rootflags=noatime`（不带 btrfs compress/subvol）；
+- `acpi=off`、`fw_devlink=permissive`（7.2.11 nabu DTS 路径；不要
+  `fw_devlink.strict=1`）；
+- `systemd.gpt_auto=no`，避免自动挂载 Android 分区；
+- `console=tty0`、`quiet`、`loglevel=3`、`fbcon=rotate:1`、
+  `allow_mismatched_32bit_el0`、`psi=1`、`cgroup_disable=pressure`、
+  `cpufreq.default_governor=schedutil`、`swiotlb=8192`、
+  `vt.global_cursor_default=0`、`cryptomgr.notests`。
 
-`image/firmware/` 已并入 pmOS 的 `xiaomi-nabu-firmware`（仓库：<https://gitlab.postmarketos.org/panpanpanpan/nabu-firmware>），共 17 个文件 / 约 34 MB，打包进 `/usr/lib/firmware/`：
+UKI 的 DTB 解析顺序（`prepare-rootfs.sh` 与设备端 `armada-uki-update` 一致）：
 
-- `qcom/a630_sqe.fw`、`qcom/a640_gmu.bin`（GPU）
-- `qcom/sm8150/Xiaomi/nabu/{a640_zap.mbn,adsp.mbn,cdsp.mbn,modem.mbn,modemuw.jsn,venus.mbn,wlanmdsp.mbn}`（VPU/音频 DSP/调制解调器/Wi-Fi）
-- `qca/{crbtfw32.tlv,crnv32.bin}`、`cirrus/{cs35l41-*.wmfw,BL/BR/TL/TR-*.bin}`、`novatek/novatek_nt36523_fw.bin`
-- 未收 `hexagonfs/`（Android ADSP 传感器配置，主线用 LSM6DSO + iio-sensor-proxy，不需要）和 `board-2.bin`/`firmware-5.bin`；若后续 Wi-Fi 需要板级数据，再从同仓库补。
+1. BLS `devicetree`；
+2. BLS `fdtdir` + `/qcom/<name>.dtb`；
+3. `/usr/lib/modules/<kver>/dtb/qcom/<name>.dtb` 回退。
 
-> 注意：内核 PKGBUILD 本身并不包含固件，`depends` 里也没有它；固件是独立的 Arch 包 `xiaomi-nabu-firmware`（你平板上已安装）。Armada 的 Fedora 基础镜像不会继承 Arch 的 `/usr/lib/firmware`，所以必须像这里一样显式打进镜像。
+`image/uki-dtb` 固定为 `sm8150-xiaomi-nabu`。ESP 上保留最近 2 个 UKI（KEEP=2）。
 
-## 4. 在平板上安装
+## 6. 用户态（本分支）
+
+- **音频**：`Xiaomi/nabu` UCM（四路 CS35L41 + WCD9340 麦克风）和 PipeWire
+  扬声器高通/保护滤波。
+- **Wi-Fi MAC**：`nabu-pmac-set` + `nabu-pmac.service` + `10-wlan.link`
+  （固定 `wlan0`）。
+- **平板模式基础**：`nabu-tablet-mode`（键盘/盖子 → `SW_TABLET_MODE`），
+  `/usr/libexec/nabu-tablet-mode`，systemd 服务已 enable。
+- **背光权限**：ktz8866 的 udev 规则。
+- **Plasma 配置层**（只配置，不重编 Plasma）：
+  - `kwinoutputconfig.json`：`DSI-1`、1600×2560@120Hz、`scale=1.75`、
+    `Rotated270`、`autoRotation=InTabletMode`、HDR 关闭、`sdrBrightness=200`；
+  - `kwinrc`/`plasmarc` 打开虚拟键盘，`plasma-keyboard` 已加入 base 包；
+  - `/etc/xdg/kwalletrc` 关闭 KWallet；
+  - `sddm.conf.d/10-nabu.conf` 只设置 Breeze 主题和 layer-shell greeter 环境，
+    **不替换** greeter 合成器（避免破坏 gamescope 自动登录）。
+  - **默认会话仍是 gamescope**（`system_files/etc/sddm.conf.d/armada.conf`），
+    Plasma 作为可选会话。
+
+## 7. CI
+
+`.github/workflows/nabu-image.yml`：
+
+1. `kernel` job（`ubuntu-24.04-arm`，330 分钟）：装 `bc/bison/flex/libssl-dev/
+   libelf-dev/dwarves/...`，跑 `scripts/ci/build-kernel.sh`，上传内核 artifact。
+2. `image` job（`needs: kernel`，300 分钟）：下载 kernel artifact，用
+   `packages/package-hash.sh kernel` 注册本地 kernel 镜像，`just build`，
+   构建 `image/Containerfile`，推送 GHCR，跑 `prepare-rootfs.sh`，
+   上传 rootfs/UKI 并（可选）发布 Release（>1.9 GB 自动分卷）。
+
+手动触发：Actions → **nabu Armada image** → Run workflow → 分支 `nabu`；
+`kernel_ref` 留空即使用固定 commit。失败时把 job 日志贴回来。
+
+`nabu-bib-debug.yml` 可在镜像已推送后只重跑 BIB 部分，节省内核/rootfs 时间。
+
+## 8. 安装
+
+设备上已有 rEFInd/DBKP 启动链。从 Arch 或 live USB：
 
 ```bash
-# 0) 从 GitHub Releases 下载：*.img.zst（或分卷 part-*）、*.efi.zst、*.sha256、install.txt
-# 1) 解压 rootfs（分卷时用 cat）
-zstd -d armadaos-rootfs-YYYYMMDD.img.zst -o armadaos-rootfs.img
-# cat armadaos-rootfs-YYYYMMDD.img.zst.part-* | zstd -d > armadaos-rootfs.img
-sha256sum -c armadaos-rootfs-YYYYMMDD.img.sha256
-
-# 2) 写 rootfs 到 linux 分区（会覆盖现 Arch；先备份）
+zstd -d armadaos-rootfs-*.img.zst -o armadaos-rootfs.img
+# Release 分卷时：cat armadaos-rootfs-*.img.zst.part-* | zstd -d > armadaos-rootfs.img
+sha256sum -c armadaos-rootfs-*.img.sha256
 sudo dd if=armadaos-rootfs.img of=/dev/disk/by-partlabel/linux bs=4M conv=fsync status=progress
-# 首启由 x-systemd.growfs 扩到整分区
 
-# 3) 解压 UKI 并拷到 ESP
-zstd -d armada-7.2.6-sm8150-726-1.efi.zst -o armada-7.2.6-sm8150-726-1.efi
+zstd -d armada-*.efi.zst -o armada.efi
 sudo mkdir -p /boot/efi/EFI/armadaOS
-sudo cp armada-7.2.6-sm8150-726-1.efi /boot/efi/EFI/armadaOS/
-
-# 3) rEFInd：一般会自动扫到 EFI/armadaOS/*.efi；若没有，在 refind.conf 加：
-# menuentry "ArmadaOS (nabu)" {
-#     icon   /EFI/BOOT/icons/os_linux.png
-#     loader /EFI/armadaOS/armada-7.2.6-sm8150-726-1.efi
-# }
-
-# 4) 保留旧 Arch UKI，重启在 rEFInd 里选 ArmadaOS
+sudo cp armada.efi /boot/efi/EFI/armadaOS/
 ```
 
-**fstab / hostname 已在镜像里**：
+首启由 `x-systemd.growfs` 扩到整分区。rEFInd 会自动列出
+`EFI/armadaOS/*.efi`；保留旧的 Arch/Android 条目。
+
+## 9. 验证清单
+
+```bash
+journalctl -b -p err
+dmesg | grep -iE "firmware|remoteproc|dsi|panel|cs35l41|iris|ath10k|qcom_bms"
+cat /proc/cmdline
+ls /dev/dri /dev/input /sys/class/backlight
+aplay -l
+nmcli device status
+kscreen-doctor -o     # 切到 Plasma 后确认 connector/scale/rotation
 ```
-PARTLABEL=linux / ext4 rw,errors=remount-ro,x-systemd.growfs,relatime 0 1
-PARTLABEL=esp /boot/efi vfat fmask=0022,dmask=0022 0 1
+
+本分支预期：显示/触摸/GPU/音频/Wi-Fi/充电可用；Plasma 配置在切到 Plasma 时
+生效；默认 gamescope。
+
+## 10. 已知限制与注意事项
+
+- 传感器/自动旋转/自动亮度、patched upower、iris-vaapi、相机、stylus-popup
+  不在本分支。
+- USB-C DisplayPort alt-mode 是 nabu 硬件限制，不支持。
+- `sddm-nabu` 的 VT/session-reuse 补丁未合入；若出现 autologin 后切换用户黑屏，
+  下一轮再 rebase 到 Fedora sddm 0.21。
+- `kwinoutputconfig.json` 的 `DSI-1`/`scale=1.75` 来自参考设备，切到 Plasma 后
+  用 `kscreen-doctor -o` 核对；不同命名/偏好需调整 JSON。
+- Release 单文件 2 GiB 限制；工作流自动 split。
+- ESP 264 MB 左右时，两个 ~100 MB UKI 可能吃紧；必要时把 `KEEP` 降为 1。
+- 不要修改 `packages/`：`package-hash.sh` 会把 `packages/Containerfile`
+  计入所有包 hash，任何改动都会让 `just build` 找不到已发布镜像。
+
+## 11. 分支流程
+
+```bash
+git switch -c nabu main
+# 提交
+git push ssh-fork nabu:nabu
+# CI + 设备验证通过后：
+git switch main
+git merge --no-ff nabu -m "Merge nabu: ArmadaOS 7.2.11 port for Xiaomi Pad 5"
+git push ssh-fork main:main
 ```
-hostname=`xiaomi-nabu`。
 
-## 5. OTA / 回滚
-
-- 镜像推在 `ghcr.io/<你>/armada-nabu:nabu`，BIB 的 bootc origin 指向它；在设备上 `sudo bootc upgrade` 拉新 digest。
-- 关机时 `ostree-finalize-staged` 的 drop-in → `armada-uki-finalize` → `armada-uki-update` 重新生成 `/EFI/armadaOS/armada-<新kver>-<hash>.efi`（保留最近 2 个）；UKI 生成失败会自动 `bootc rollback`。
-- rEFInd 里每代 UKI 都是独立文件 → 直接选旧 UKI 即可回滚（与文件系统无关）。
-- 若只改内核：工作流重新构建会带新 KVER/新 UKI；老部署的 UKI 仍保留。
-
-## 6. 首次运行的验证清单（重要）
-
-工作流是「按现有 BIB/Armada 约定写的」，第一次跑很可能要微调，按顺序看：
-
-- [ ] `just build` 是否用了本地 kernel：日志里 `localhost/armada/pkg/kernel:<hash>`；若失败，先单独 `bash scripts/ci/build-kernel.sh` 看内核编译。
-- [ ] BIB 是否接受 `--rootfs=ext4`（不支持就把 `prepare-rootfs.sh` 里改成 `--rootfs=btrfs` 并同步 fstab；或改用 `--rootfs=ext4` 对应的 BIB 版本）。
-- [ ] BIB 的 raw 分区布局：脚本按内容自动识别 `/boot`（含 `loader/`+`ostree/`）和 root（含 `/usr`+`/ostree`）；若 BIB 用 systemd-boot 把 BLS 放 ESP，需要再改。
-- [ ] 合并后 root 分区空间（16 GiB）是否够 Armada rootfs；不够就调 `ci/disk-nabu.toml` 到 20 GiB。
-- [ ] UKI 大小 ~70–110 MB，ESP FAT 目前只有 264 MB 可用；**先备份并扩容 ESP FAT**（`fatresize -s max /dev/sda31`），或只保留 1 个 UKI。
-- [ ] Release 上传：rootfs zstd 后若超过 2 GiB，工作流会自动 split 成 `*.part-00/01/...`；GitHub Release 单文件上限 2 GiB，本地 `cat part-* | zstd -d` 合并即可。
-- [ ] 首启：`journalctl -b` 看 `ostree-prepare-root`、`root=PARTLABEL=linux` 是否解析成功；`systemctl status armada-uki-sync`。
-- [ ] `bootc status` 的 origin 是否为 `ghcr.io/<你>/armada-nabu:nabu`；`bootc upgrade` 能拉新镜像。
-- [ ] 音频（7.2.6 NGD）、触摸、充电、Wi-Fi、GPU 按你 7.2.6 真机清单复测。
-
-## 7. 备注
-
-- 首次构建时间：kernel 40–90 min + Armada rootfs 20–40 min + BIB/导出 10–20 min；公开仓库 runner 免费。
-- 本工作流只构建/推送镜像 + 产物，不改 Android 分区；ESP 操作全在设备上手动完成。
-- 如果之后要合并 Armada 的 192 条 patch（HDR/色彩/输入），建议另开分支做 patch 顺序调和，不要直接叠加。
+只推 fork `shinaNaoki/armada`，不推上游 `armada-os/armada`。

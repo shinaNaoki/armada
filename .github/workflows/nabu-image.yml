@@ -2,10 +2,18 @@ name: nabu Armada image
 
 on:
   workflow_dispatch:
+    inputs:
+      kernel_ref:
+        description: "Kumar-Jy/linux nabu/7.2.y commit to build (empty = pinned default)"
+        type: string
+        default: ""
+      publish_release:
+        description: "Create a GitHub Release with the rootfs/UKI artifacts"
+        type: boolean
+        default: true
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 concurrency:
   group: nabu-image-${{ github.ref }}
@@ -13,12 +21,59 @@ concurrency:
 
 env:
   TAG: nabu
+  KERNEL_REPO: https://github.com/Kumar-Jy/linux
+  KERNEL_BRANCH: nabu/7.2.y
+  KERNEL_DEFAULT_REF: 739161a890128f23bd1aa679d8754a9ea299269e
 
 jobs:
-  build:
+  kernel:
+    name: build nabu 7.2.11 kernel
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 330
+    steps:
+      - name: Free disk space
+        uses: ublue-os/remove-unwanted-software@cc0becac701cf642c8f0a6613bbdaf5dc36b259e # v9
+        with:
+          remove-codeql: true
+
+      - uses: actions/checkout@v4
+
+      - name: Install kernel build tools
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex libssl-dev libelf-dev dwarves gcc make perl \
+            cpio zstd git kmod ca-certificates curl
+          gcc --version; bc --version | head -1; pahole --version
+
+      - name: Build kernel (Armada tarball layout)
+        env:
+          KERNEL_REF: ${{ inputs.kernel_ref || '739161a890128f23bd1aa679d8754a9ea299269e' }}
+        run: |
+          set -euxo pipefail
+          chmod +x scripts/ci/build-kernel.sh
+          JOBS=$(nproc) ./scripts/ci/build-kernel.sh
+          ls -lh out/armada-kernel-*.tar.zst*
+
+      - name: Upload kernel tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: armada-kernel-nabu-${{ github.run_number }}
+          compression-level: 0
+          retention-days: 14
+          path: |
+            out/armada-kernel-*.tar.zst
+            out/armada-kernel-*.tar.zst.sha256
+
+  image:
     name: build rootfs + UKI
+    needs: kernel
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 300
+    permissions:
+      contents: write
+      packages: write
     steps:
       - name: Free disk space
         uses: ublue-os/remove-unwanted-software@cc0becac701cf642c8f0a6613bbdaf5dc36b259e # v9
@@ -34,7 +89,6 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             podman buildah skopeo systemd-ukify systemd-boot-efi jq \
             e2fsprogs dosfstools mtools rsync pigz zstd xz-utils cpio \
-            bc bison flex libssl-dev libelf-dev dwarves gcc make perl \
             curl git ca-certificates kmod
           podman --version; buildah --version; ukify --version
 
@@ -43,6 +97,12 @@ jobs:
       - name: Install just
         uses: ublue-os/just-action@30ab4659369934b65b655bf8d2fa4ddd6547d384 # v3
 
+      - name: Download kernel tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: armada-kernel-nabu-${{ github.run_number }}
+          path: out
+
       - name: Resolve image name
         id: img
         run: |
@@ -50,17 +110,10 @@ jobs:
           owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
           echo "ref=ghcr.io/${owner}/armada-nabu" >> "$GITHUB_OUTPUT"
 
-      - name: Build nabu 7.2.6 kernel (Armada layout)
-        run: |
-          set -euxo pipefail
-          chmod +x scripts/ci/build-kernel.sh scripts/ci/prepare-rootfs.sh
-          JOBS=$(nproc) ./scripts/ci/build-kernel.sh
-          ls -lh out/armada-kernel-*.tar.zst*
-
       - name: Register local kernel package image (content-hash ref)
         run: |
           set -euxo pipefail
-          hash=$(packages/package-hash.sh kernel)
+          hash=$(bash packages/package-hash.sh kernel)
           mkdir -p .ci-kernel-pkg
           cp out/armada-kernel-*.tar.zst out/armada-kernel-*.tar.zst.sha256 .ci-kernel-pkg/
           printf 'FROM scratch\nCOPY . /kernel/\n' > .ci-kernel-pkg/Containerfile
@@ -105,7 +158,22 @@ jobs:
           find out -type f -printf '%s %p\n' | sort -n | tail -10
           cat out/sha256sums.txt || true
 
+      - name: Upload image artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nabu-image-${{ github.run_number }}
+          compression-level: 0
+          retention-days: 14
+          path: |
+            out/EFI/armadaOS/*.efi.zst
+            out/armadaos-rootfs-*.img.zst
+            out/armadaos-rootfs-*.img.sha256
+            out/install.txt
+            out/sha256sums.txt
+          if-no-files-found: error
+
       - name: Publish GitHub release
+        if: ${{ inputs.publish_release }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -130,13 +198,3 @@ jobs:
             --notes-file out/install.txt \
             --latest=false \
             release/*
-
-      - name: Upload kernel tarball
-        uses: actions/upload-artifact@v4
-        with:
-          name: armada-kernel-nabu-${{ github.run_number }}
-          compression-level: 0
-          retention-days: 14
-          path: |
-            out/armada-kernel-*.tar.zst
-            out/armada-kernel-*.tar.zst.sha256
