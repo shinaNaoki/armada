@@ -26,6 +26,9 @@ assert_contains scripts/ci/build-kernel.sh "nabu_defconfig"
 assert_contains scripts/ci/build-kernel.sh "ci/nabu/kernel.config"
 assert_contains scripts/ci/build-kernel.sh "ci/nabu/kernel.required"
 assert_contains scripts/ci/build-kernel.sh "-sm8150-nabu-1"
+assert_contains scripts/ci/build-kernel.sh 'EXTRAVERSION="$EXTRAVERSION" LOCALVERSION='
+assert_contains scripts/ci/build-kernel.sh 'make "${make_opts[@]}" syncconfig'
+assert_not_contains scripts/ci/build-kernel.sh 'LOCALVERSION="$LOCALVERSION"'
 assert_not_contains scripts/ci/build-kernel.sh "7.2.6"
 assert_not_contains scripts/ci/build-kernel.sh "ci/nabu-kernel"
 
@@ -43,12 +46,15 @@ for symbol in \
     assert_contains ci/nabu/kernel.config "$symbol"
     assert_contains ci/nabu/kernel.required "$symbol"
 done
+assert_contains ci/nabu/kernel.config "CONFIG_LOCALVERSION_AUTO=n"
+assert_contains ci/nabu/kernel.required "CONFIG_LOCALVERSION_AUTO=n"
 assert_contains ci/nabu/kernel.config 'CONFIG_LSM="landlock,lockdown,yama,integrity,selinux,bpf"'
 assert_contains ci/nabu/kernel.required "CONFIG_DEBUG_INFO_REDUCED=n"
 assert_contains ci/nabu/kernel.required "CONFIG_DRM_PANEL_NOVATEK_NT36523=y"
 assert_contains ci/nabu/kernel.required "CONFIG_TOUCHSCREEN_NT36523_SPI=m"
 assert_contains ci/nabu/kernel.required "CONFIG_QCOM_BMS=y"
 assert_contains ci/nabu/kernel.required "CONFIG_CHARGER_IDTP9418=m"
+assert_contains ci/nabu/kernel.required "CONFIG_F2FS_FS=y"
 
 # --- kargs -----------------------------------------------------------------
 assert_file image/10-armada-nabu.toml
@@ -108,6 +114,7 @@ assert_contains system_files/etc/sddm.conf.d/10-nabu.conf "Current=breeze"
 assert_not_contains system_files/etc/sddm.conf.d/10-nabu.conf "CompositorCommand"
 assert_contains system_files/etc/sddm.conf.d/armada.conf "Session=gamescope-session-steam.desktop"
 assert_contains build_files/10-base-packages.sh "plasma-keyboard"
+assert_contains build_files/10-base-packages.sh "f2fs-tools"
 assert_contains build_files/50-create-user.sh "/var/lib/sddm/.config"
 
 # --- CI --------------------------------------------------------------------

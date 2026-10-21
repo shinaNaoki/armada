@@ -55,6 +55,16 @@ lib/modules/<kver>/dtb/qcom/sm8150-xiaomi-nabu.dtb
 lib/modules/<kver>/.armada-source
 ```
 
+## Version suffix
+
+The release suffix is supplied on the make command line as
+`EXTRAVERSION=-sm8150-nabu-1` with `LOCALVERSION=` explicitly empty.
+`ci/nabu/kernel.config` also sets `CONFIG_LOCALVERSION=""` and
+`CONFIG_LOCALVERSION_AUTO=n`, so `scripts/setlocalversion` cannot append
+`-g<sha>` or `-dirty`. The build script runs `make syncconfig` after
+`olddefconfig` because `setlocalversion` reads `CONFIG_LOCALVERSION_AUTO` from
+`include/config/auto.conf`, not directly from `.config`.
+
 ## Local validation (config only, no root required)
 
 ```bash

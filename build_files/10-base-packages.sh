@@ -36,6 +36,7 @@ pkgs=(
     curl
     distrobox
     evtest
+    f2fs-tools
     fuse
     gdisk
     git

@@ -19,7 +19,7 @@
 #   KERNEL_BRANCH    default nabu/7.2.y
 #   KERNEL_REF       default 739161a890128f23bd1aa679d8754a9ea299269e
 #   KERNEL_VER       default 7.2.11
-#   LOCALVERSION     default -sm8150-nabu-1
+#   EXTRAVERSION     default -sm8150-nabu-1 (LOCALVERSION is forced empty)
 #   JOBS             default nproc
 #   KERNEL_WORK      default <repo>/.ci-kernel
 #   KERNEL_SRC_DIR   reuse an existing checkout (skips clone/fetch)
@@ -32,7 +32,10 @@ KERNEL_REPO=${KERNEL_REPO:-https://github.com/Kumar-Jy/linux}
 KERNEL_BRANCH=${KERNEL_BRANCH:-nabu/7.2.y}
 KERNEL_REF=${KERNEL_REF:-739161a890128f23bd1aa679d8754a9ea299269e}
 KERNEL_VER=${KERNEL_VER:-7.2.11}
-LOCALVERSION=${LOCALVERSION:--sm8150-nabu-1}
+# The version suffix belongs in EXTRAVERSION, not LOCALVERSION, and
+# LOCALVERSION is passed as an explicitly empty make variable so
+# scripts/setlocalversion never appends "+", "-g<sha>" or "-dirty".
+EXTRAVERSION=${EXTRAVERSION:--sm8150-nabu-1}
 JOBS=${JOBS:-$(nproc)}
 WORK_DIR=${KERNEL_WORK:-$repo/.ci-kernel}
 OUT_DIR=${OUT_DIR:-$repo/out}
@@ -117,6 +120,10 @@ else
 fi
 
 make "${make_opts[@]}" olddefconfig >/dev/null
+# olddefconfig only writes .config; refresh include/config/auto.conf because
+# scripts/setlocalversion reads CONFIG_LOCALVERSION_AUTO from there when
+# computing the release suffix.
+make "${make_opts[@]}" syncconfig >/dev/null
 
 # ---------- 3. Verify required symbols ----------
 verify_required() {
@@ -153,7 +160,7 @@ fi
 command -v bc >/dev/null 2>&1 || die "missing build tool: bc"
 
 # ---------- 4. Build ----------
-KVER=$(make "${make_opts[@]}" LOCALVERSION="$LOCALVERSION" -s kernelrelease)
+KVER=$(make "${make_opts[@]}" EXTRAVERSION="$EXTRAVERSION" LOCALVERSION= -s kernelrelease)
 case "$KVER" in
     "$KERNEL_VER"-*) ;;
     *) die "unexpected kernelrelease '$KVER' (expected ${KERNEL_VER}-...)" ;;
@@ -161,7 +168,7 @@ esac
 log "kernel release: $KVER"
 
 log "building Image + modules + $DTB (-j$JOBS)"
-make "${make_opts[@]}" LOCALVERSION="$LOCALVERSION" -j"$JOBS" \
+make "${make_opts[@]}" EXTRAVERSION="$EXTRAVERSION" LOCALVERSION= -j"$JOBS" \
     Image modules "qcom/$DTB"
 
 # ---------- 5. Stage Armada tarball layout ----------
@@ -170,7 +177,7 @@ rm -rf "$STAGE"
 install -d "$STAGE/lib/modules/$KVER/dtb/qcom"
 install -m644 arch/arm64/boot/Image "$STAGE/lib/modules/$KVER/vmlinuz"
 
-make "${make_opts[@]}" LOCALVERSION="$LOCALVERSION" \
+make "${make_opts[@]}" EXTRAVERSION="$EXTRAVERSION" LOCALVERSION= \
     INSTALL_MOD_PATH="$STAGE" INSTALL_MOD_STRIP=1 modules_install >/dev/null
 rm -f "$STAGE/lib/modules/$KVER/build" "$STAGE/lib/modules/$KVER/source"
 

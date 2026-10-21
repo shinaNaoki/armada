@@ -6,6 +6,10 @@
 # The device-driver section is intentionally the reference nabu_defconfig
 # (Kumar-Jy/linux nabu/7.2.y); only assert the symbols Armada relies on.
 
+# --- version suffix --------------------------------------------------------
+CONFIG_LOCALVERSION=""
+CONFIG_LOCALVERSION_AUTO=n
+
 # --- LSM / SELinux ---------------------------------------------------------
 CONFIG_SECURITY_SELINUX=y
 CONFIG_SECURITY_SELINUX_BOOTPARAM=y
@@ -71,6 +75,7 @@ CONFIG_QRTR=y
 CONFIG_CFG80211=m
 CONFIG_ATH10K_SNOC=m
 CONFIG_EXT4_FS=y
+CONFIG_F2FS_FS=y
 CONFIG_SCSI_UFS_QCOM=y
 CONFIG_OVERLAY_FS=m
 CONFIG_BINFMT_MISC=m

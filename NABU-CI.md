@@ -58,11 +58,14 @@ system_files/etc/sddm.conf.d/10-nabu.conf           # 保守的 greeter 配置
    `KERNEL_REF`；分支移动会直接失败，必须显式更新 pin。
 2. `make ARCH=arm64 nabu_defconfig`。
 3. 用 `scripts/kconfig/merge_config.sh` 合并 `ci/nabu/kernel.config`，
-   关闭 `DEBUG_INFO_REDUCED`，`make olddefconfig`。
+   关闭 `DEBUG_INFO_REDUCED`，`make olddefconfig`，再 `make syncconfig`
+   刷新 `include/config/auto.conf`。
 4. 按 `ci/nabu/kernel.required` 逐项校验（SELinux/BTF/scx/EROFS/nabu 驱动等），
    任何不匹配都会打印实际值并退出。
-5. 编译 `Image modules qcom/sm8150-xiaomi-nabu.dtb`，
-   `LOCALVERSION=-sm8150-nabu-1`，得到 `7.2.11-sm8150-nabu-1`。
+5. 编译 `Image modules qcom/sm8150-xiaomi-nabu.dtb`，通过 make 参数
+   `EXTRAVERSION=-sm8150-nabu-1 LOCALVERSION=` 得到 `7.2.11-sm8150-nabu-1`。
+   `CONFIG_LOCALVERSION_AUTO` 已在 config 中关闭，避免 `-g<sha>`/`-dirty`
+   后缀进入 `/usr/lib/modules` 和 UKI 名称。
 6. 暂存成 Armada 需要的布局并打包：
    ```
    lib/modules/<kver>/vmlinuz
@@ -132,6 +135,9 @@ UKI 的 DTB 解析顺序（`prepare-rootfs.sh` 与设备端 `armada-uki-update` 
 - **平板模式基础**：`nabu-tablet-mode`（键盘/盖子 → `SW_TABLET_MODE`），
   `/usr/libexec/nabu-tablet-mode`，systemd 服务已 enable。
 - **背光权限**：ktz8866 的 udev 规则。
+- **F2FS/userdata**：`CONFIG_F2FS_FS=y` 由 `kernel.required` 断言，镜像内置
+  `f2fs-tools`；可手动 `mount -t f2fs -o ro` 读取 userdata。Android 的
+  FBE/元数据加密仍需 keymaster/TEE 密钥，不在本分支处理。
 - **Plasma 配置层**（只配置，不重编 Plasma）：
   - `kwinoutputconfig.json`：`DSI-1`、1600×2560@120Hz、`scale=1.75`、
     `Rotated270`、`autoRotation=InTabletMode`、HDR 关闭、`sdrBrightness=200`；
