@@ -53,7 +53,7 @@ meson install -C build
 fetch "https://github.com/linux-msm/hexagonrpc/archive/refs/tags/v${HEXAGONRPC_VERSION}.tar.gz" hexagonrpc
 extract hexagonrpc hexagonrpc
 cd "$WORK/hexagonrpc"
-meson setup build --prefix=/usr --buildtype=release
+meson setup build --prefix=/usr --libdir=/usr/lib64 --buildtype=release
 ninja -C build
 DESTDIR="$OUT" meson install -C build
 install -d "$OUT/usr/libexec/hexagonrpc"
@@ -63,7 +63,7 @@ mv "$OUT/usr/bin/hexagonrpcd" "$OUT/usr/libexec/hexagonrpc/hexagonrpcd"
 fetch "https://github.com/linux-msm/qrtr/archive/${QRTR_REF}.tar.gz" qrtr
 extract qrtr qrtr
 cd "$WORK/qrtr"
-meson setup build --prefix=/usr --buildtype=release \
+meson setup build --prefix=/usr --libdir=/usr/lib64 --buildtype=release \
     -Dqrtr-ns=enabled -Dsystemd-service=enabled \
     -Dsystemd-unit-prefix=/usr/lib/systemd/system
 ninja -C build
@@ -84,7 +84,7 @@ make DESTDIR="$OUT" prefix=/usr install
 fetch "https://github.com/linux-msm/tqftpserv/archive/refs/tags/v${TQFTPSERV_VERSION}.tar.gz" tqftpserv
 extract tqftpserv tqftpserv
 cd "$WORK/tqftpserv"
-meson setup build --prefix=/usr --buildtype=release
+meson setup build --prefix=/usr --libdir=/usr/lib64 --buildtype=release
 ninja -C build
 DESTDIR="$OUT" meson install -C build
 
@@ -94,7 +94,7 @@ extract iio-sensor-proxy iio-sensor-proxy
 cd "$WORK/iio-sensor-proxy"
 patch -p1 -i "$SRC/sensors/patches/0001-fix-ssc-race-condition.patch"
 patch -p1 -i "$SRC/sensors/patches/0002-ssc-proximity-nabu-sar-fallback.patch"
-meson setup build --prefix=/usr --buildtype=release \
+meson setup build --prefix=/usr --libdir=/usr/lib64 --buildtype=release \
     -Dssc-support=enabled -Dgtk_doc=false -Dgtk-tests=false -Dtests=false \
     -Dsystemdsystemunitdir=/usr/lib/systemd/system \
     -Dudevrulesdir=/usr/lib/udev/rules.d \
