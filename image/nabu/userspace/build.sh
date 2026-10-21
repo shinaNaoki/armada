@@ -42,6 +42,7 @@ fetch "https://codeberg.org/DylanVanAssche/libssc/archive/v${LIB_SSC_VERSION}.ta
 extract libssc libssc
 cd "$WORK/libssc"
 patch -p1 -i "$SRC/sensors/patches/0001-report-handler-lifecycle-fixes.patch"
+patch -p1 -i "$SRC/sensors/patches/0002-libssc-base-report-id-gulong.patch"
 meson setup build --prefix=/usr --libdir=/usr/lib64 --buildtype=release
 ninja -C build
 DESTDIR="$OUT" meson install -C build

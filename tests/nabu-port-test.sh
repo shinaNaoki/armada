@@ -103,6 +103,8 @@ assert_not_contains image/Containerfile "qcom/sm8150/Xiaomi"
 # --- second round: sensors + iris -----------------------------------------
 assert_file image/nabu/userspace/build.sh
 assert_file image/nabu/sensors/patches/0001-report-handler-lifecycle-fixes.patch
+assert_file image/nabu/sensors/patches/0002-libssc-base-report-id-gulong.patch
+assert_contains image/nabu/userspace/build.sh "0002-libssc-base-report-id-gulong.patch"
 assert_file image/nabu/sensors/patches/0001-fix-ssc-race-condition.patch
 assert_file image/nabu/sensors/patches/0002-ssc-proximity-nabu-sar-fallback.patch
 assert_file image/nabu/iris/patches/0001-vaapi-support-vaAcquireBufferHandle-and-default-expo.patch

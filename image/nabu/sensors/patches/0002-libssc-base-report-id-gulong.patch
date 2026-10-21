@@ -1,0 +1,20 @@
+From: Kumar-Jy <kumar@nabu>
+Subject: [PATCH] libssc: use gulong for the base sensor report handler id
+
+The nabu lifecycle patch switches the per-sensor report_id fields to
+gulong so g_clear_signal_handler() can take their address. The base
+SSCSensorPrivate in src/libssc-sensor.c was missed, which fails to
+compile against glib >= 2.80 with -Wincompatible-pointer-types.
+
+diff --git a/src/libssc-sensor.c b/src/libssc-sensor.c
+--- a/src/libssc-sensor.c
++++ b/src/libssc-sensor.c
+@@ -57,7 +57,7 @@
+ 	gfloat mount_matrix[3][3];
+ 
+ 	SSCClient *client;
+-	guint report_id;
++	gulong report_id;
+ 	gboolean attr_populated;
+ 	gboolean service_available;
+ 	guint service_retries;
