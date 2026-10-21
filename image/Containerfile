@@ -15,7 +15,7 @@ RUN dnf -y install --setopt=install_weak_deps=False \
         gcc gcc-c++ make meson ninja-build pkgconf-pkg-config patch \
         curl tar xz findutils \
         glib2-devel libqmi-devel protobuf-c protobuf-c-devel protobuf-c-compiler \
-        gobject-introspection-devel libgudev-devel polkit-devel \
+        gobject-introspection-devel python3-devel libgudev-devel polkit-devel \
         systemd-devel libzstd-devel libva-devel libdrm-devel vulkan-headers \
     && dnf clean all
 COPY image/nabu/sensors /src/nabu/sensors
