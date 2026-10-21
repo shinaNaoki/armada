@@ -6,8 +6,9 @@
 1. 可 `dd` 到 `linux` 分区的 **ext4 rootfs 镜像**（含 ostree 部署、内核模块、固件、`/boot`）；
 2. 可拷到 ESP 的 **UKI**（`EFI/armadaOS/armada-<kver>.efi`）。
 
-> 本分支（`nabu`）现在是核心硬件 + Plasma 配置层 + 传感器/SLPI + iris VA-API。
-> 相机、patched upower、stylus-popup 仍留到后续迭代。
+> 本分支（`nabu`）现在是核心硬件 + Plasma 配置层 + 传感器/SLPI + iris VA-API
+> + patched upower + stylus-popup + system-monitor/torch。
+> 相机仍留到后续迭代（Fedora 缺少 camera-studio 需要的 gtk4paintablesink）。
 
 ## 1. 参考与源码固定
 
@@ -27,6 +28,8 @@
 | rmtfs / tqftpserv | `v1.3` / `v1.2` |
 | iio-sensor-proxy | `3.9` + SSC race/proximity patches |
 | iris-vaapi | `b0ef8f7512321d36d52e4a1a52fd3eb0eec9a107` |
+| upower | `1.91.5` + nabu battery-state sed |
+| stylus-popup | `17a42eec965d153b119d9230550d6721523129f7` + 3 patches |
 
 参考仓库：`Nabu-arch-images`（安装/UKI/Plasma 配置）与 `nabu-pkgs`（Arch 包、
 内核 PKGBUILD、固件、UCM、传感器包）。**不要**再使用旧的 `ci/nabu-kernel/`
@@ -163,6 +166,14 @@ UKI 的 DTB 解析顺序（`prepare-rootfs.sh` 与设备端 `armada-uki-update` 
 - **iris VA-API**：从固定 commit `b0ef8f75...` 编译 `iris-vaapi`，安装到
   `/usr/lib64/dri`（同时保留 `/usr/lib/dri` 链接），配套 dma-heap udev 规则、
   `99-iris-vaapi.conf`；镜像带 `libva-utils`/`v4l-utils` 便于 `vainfo` 验证。
+- **patched upower**：在 userspace 阶段从源码编译 upower 1.91.5，去掉
+  `up-device-supply-battery.c` 里强制 DISCHARGING 的分支；`upower.service`
+  已 enable，电池容量/状态来自 `qcom_bms`。
+- **stylus-popup**：固定 commit `17a42ee...` + 三个 nabu 补丁，CMake 构建；
+  unit 安装到 `/usr/lib/systemd/user` 并全局 enable，读取 `/dev/idtp9418`。
+- **system-monitor / nabu-torch**：参考仓库的 Python GTK4 应用，
+  `system-monitor`/`sysmon`/`nabu-gpu-monitor` 与 `torch`/`flashlight` 命令
+  及桌面文件、torch udev 规则。
 - **Plasma 配置层**（只配置，不重编 Plasma）：
   - `kwinoutputconfig.json`：`DSI-1`、1600×2560@120Hz、`scale=1.75`、
     `Rotated270`、`autoRotation=InTabletMode`、HDR 关闭、`sdrBrightness=200`；
@@ -228,6 +239,10 @@ nmcli device status
 kscreen-doctor -o     # 切到 Plasma 后确认 connector/scale/rotation
 vainfo                 # 应列出 Qualcomm Iris / vpu_drv_video
 monitor-sensor         # 加速度计/环境光应有数据
+upower -d              # 电池容量/状态，不应被强制成 discharging
+systemctl --user status stylus-popup
+torch set 100          # 手电筒亮度 0-255
+system-monitor         # GPU/电池/传感器监控
 systemctl status hexagonrpcd qrtr-ns rmtfs tqftpserv iio-sensor-proxy
 dmesg | grep -iE "fastrpc|slpi|iris|venus"
 ```
@@ -238,7 +253,11 @@ dmesg | grep -iE "fastrpc|slpi|iris|venus"
 
 ## 10. 已知限制与注意事项
 
-- 相机、patched upower、stylus-popup 仍不在本分支。
+- 相机仍不在本分支：Fedora 未打包 camera-studio 需要的
+  `gtk4paintablesink`（gst-plugins-rs），libcamera 本身可用，但预览管线需要
+  另外补 GStreamer 插件。
+- upower 的补丁只移除强制 DISCHARGING 分支；如果电量/状态仍不对，优先看
+  `qcom_bms` 的 sysfs 与 `upower -d`。
 - 传感器依赖 SLPI 固件与 `hexagonrpcd` 链路；如果 `monitor-sensor` 无数据，
   先看 `systemctl status hexagonrpcd iio-sensor-proxy` 和
   `journalctl -u hexagonrpcd -b`。

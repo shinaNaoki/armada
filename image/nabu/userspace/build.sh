@@ -19,6 +19,8 @@ QRTR_REF=5923eea97377f4a3ed9121b358fd919e3659db7b
 RMTFS_VERSION=1.3
 TQFTPSERV_VERSION=1.2
 IRIS_REF=b0ef8f7512321d36d52e4a1a52fd3eb0eec9a107
+UPOWER_VERSION=1.91.5
+STYLUS_REF=17a42eec965d153b119d9230550d6721523129f7
 
 mkdir -p "$OUT" "$WORK"
 cd "$WORK"
@@ -126,6 +128,37 @@ ln -sfn /usr/lib64/dri/vpu_drv_video.so "$OUT/usr/lib/dri/vpu_drv_video.so"
 ln -sfn /usr/lib64/dri/vpu_drv_video.so "$OUT/usr/lib/dri/iris_drv_video.so"
 ln -sfn /usr/lib64/dri/vpu_drv_video.so "$OUT/usr/lib/dri/msm_drm_drv_video.so"
 ln -sfn /usr/lib64/dri/vpu_drv_video.so "$OUT/usr/lib/dri/msm_drv_video.so"
+
+# --- upower (nabu battery state patch) -----------------------------------
+# The reference package removes upower's forced DISCHARGING transition; the
+# PM8150B/qcom_bms state would otherwise be overwritten on the tablet.
+fetch "https://gitlab.freedesktop.org/upower/upower/-/archive/v${UPOWER_VERSION}/upower-v${UPOWER_VERSION}.tar.gz" upower
+extract upower upower
+cd "$WORK/upower"
+sed -i '/^[[:space:]]*if (values.state != UP_DEVICE_STATE_FULLY_CHARGED &&/,/^[[:space:]]*values.state = UP_DEVICE_STATE_DISCHARGING;/d' \
+    src/linux/up-device-supply-battery.c
+meson setup build --prefix=/usr --libdir=/usr/lib64 --buildtype=release \
+    -Dman=false -Dgtk-doc=false -Didevice=disabled -Dinstalled_tests=false \
+    -Dintrospection=enabled -Dpolkit=enabled \
+    -Dsystemdsystemunitdir=/usr/lib/systemd/system \
+    -Dudevrulesdir=/usr/lib/udev/rules.d \
+    -Dudevhwdbdir=/usr/lib/udev/hwdb.d \
+    -Dhistorydir=/var/lib/upower -Dstatedir=/var/lib/upower
+ninja -C build
+DESTDIR="$OUT" meson install -C build
+
+# --- stylus-popup (IDTP9418 pen dock) ------------------------------------
+fetch "https://github.com/TwinbornPlate75/stylus-popup/archive/${STYLUS_REF}.tar.gz" stylus-popup
+extract stylus-popup stylus-popup
+cd "$WORK/stylus-popup"
+patch -p1 -i "$SRC/stylus/patches/0001-stylusmonitor-robust-io-and-pen-generation.patch"
+patch -p1 -i "$SRC/stylus/patches/0002-stylus-config-and-popup-generation.patch"
+patch -p1 -i "$SRC/stylus/patches/0003-stylusbuttons-generational-layout.patch"
+cmake -B build \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DSTYLUS_USER_UNIT_DIR=/usr/lib/systemd/user
+cmake --build build -j"$JOBS"
+DESTDIR="$OUT" cmake --install build
 
 # Keep only runtime files in /out; headers, pkg-config metadata and the
 # libssc Python mocking server are build/test-only and must not reach the

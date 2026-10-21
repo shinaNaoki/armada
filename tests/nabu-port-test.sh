@@ -137,6 +137,20 @@ assert_contains build_files/10-base-packages.sh "libva-utils"
 assert_contains ci/nabu/kernel.required "CONFIG_VIDEO_QCOM_IRIS=m"
 assert_contains ci/nabu/kernel.required "CONFIG_QCOM_FASTRPC=m"
 
+# --- final batch: upower, stylus, monitor, torch --------------------------
+assert_file system_files/usr/bin/system-monitor
+assert_file system_files/usr/bin/torch
+assert_file system_files/usr/lib/udev/rules.d/90-torch.rules
+assert_file image/nabu/stylus/patches/0001-stylusmonitor-robust-io-and-pen-generation.patch
+assert_file image/nabu/stylus/patches/0002-stylus-config-and-popup-generation.patch
+assert_file image/nabu/stylus/patches/0003-stylusbuttons-generational-layout.patch
+assert_contains image/nabu/userspace/build.sh "upower-v\${UPOWER_VERSION}"
+assert_contains image/nabu/userspace/build.sh "UP_DEVICE_STATE_DISCHARGING"
+assert_contains image/nabu/userspace/build.sh "stylus-popup"
+assert_contains image/nabu/userspace/build.sh "STYLUS_USER_UNIT_DIR=/usr/lib/systemd/user"
+assert_contains image/Containerfile "upower.service"
+assert_contains image/Containerfile "stylus-popup.service"
+
 # --- Plasma / SDDM config layer -------------------------------------------
 assert_file system_files/etc/skel/.config/kwinoutputconfig.json
 assert_contains system_files/etc/skel/.config/kwinoutputconfig.json '"connectorName": "DSI-1"'

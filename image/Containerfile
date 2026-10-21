@@ -17,9 +17,11 @@ RUN dnf -y install --setopt=install_weak_deps=False \
         glib2-devel libqmi-devel protobuf-c protobuf-c-devel protobuf-c-compiler \
         gobject-introspection-devel python3-devel libgudev-devel polkit-devel \
         systemd-devel libzstd-devel libva-devel libdrm-devel vulkan-headers \
+        gettext cmake qt6-qtbase-devel wayland-devel \
     && dnf clean all
 COPY image/nabu/sensors /src/nabu/sensors
 COPY image/nabu/iris /src/nabu/iris
+COPY image/nabu/stylus /src/nabu/stylus
 COPY image/nabu/userspace/build.sh /src/build.sh
 RUN bash /src/build.sh
 
@@ -85,7 +87,8 @@ RUN ldconfig
 RUN systemctl enable armada-uki-sync.service nabu-pmac.service nabu-tablet-mode.service \
         qrtr-ns.service rmtfs.service rmtfs-dir.service tqftpserv.service \
         hexagonrpcd.service hexagonrpcd-suspend.service hexagonrpcd-resume.service \
- && systemctl --global enable nabu-autobrightness.service
+        upower.service \
+ && systemctl --global enable nabu-autobrightness.service stylus-popup.service
 # iio-sensor-proxy ships no [Install] section; the 90-nabu-ssc-accelerometer
 # udev rule starts it with SYSTEMD_WANTS when fastrpc-sdsp appears.
 RUN systemctl mask armada-bootimg-sync.service armada-esp-rename.service || true
