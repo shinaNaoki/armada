@@ -1,0 +1,17 @@
+--- a/src/wlserver.cpp	2026-10-22 09:58:33.944304404 +0800
++++ b/src/wlserver.cpp	2026-10-22 09:58:33.955087868 +0800
+@@ -441,6 +441,14 @@
+ 		parent = udev_device_get_parent(parent);
+ 	}
+ 	udev_device_unref(dev);
++	if (connector == nullptr) {
++		// SPI and virtual touchscreens (for example the Xiaomi Pad 5
++		// NT36523) have no i2c/usb parent, so the heuristic above leaves the
++		// connector unset and apply_touchscreen_orientation() never runs.
++		// On a single internal panel, associate such a touchscreen with the
++		// internal connector so touch rotates with --force-orientation.
++		connector = GetBackend()->GetConnector(gamescope::GAMESCOPE_SCREEN_TYPE_INTERNAL);
++	}
+ 	if (connector != nullptr) {
+ 		touch->connector = connector;
+ 		wl_log.infof("associating connector %s (%s %s) with touch input device %s",

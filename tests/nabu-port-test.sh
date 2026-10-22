@@ -199,6 +199,11 @@ assert_contains build_files/10-base-packages.sh "plasma-keyboard"
 assert_contains build_files/10-base-packages.sh "f2fs-tools"
 assert_contains build_files/50-create-user.sh "/var/lib/sddm/.config"
 
+# --- gamescope virtual-touch orientation ------------------------------------
+assert_file packages/gamescope/patches/0029-wlserver-associate-virtual-touch-with-internal.patch
+assert_contains packages/gamescope/patches/0029-wlserver-associate-virtual-touch-with-internal.patch 'connector == nullptr'
+assert_contains packages/gamescope/patches/0029-wlserver-associate-virtual-touch-with-internal.patch 'GAMESCOPE_SCREEN_TYPE_INTERNAL'
+
 # --- CI --------------------------------------------------------------------
 assert_file .github/workflows/nabu-image.yml
 assert_contains .github/workflows/nabu-image.yml "Build kernel (Armada tarball layout)"
