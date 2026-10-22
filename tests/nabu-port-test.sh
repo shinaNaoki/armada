@@ -212,6 +212,8 @@ assert_contains .github/workflows/nabu-image.yml "kernel_run_id"
 assert_contains .github/workflows/nabu-image.yml "gh run download"
 assert_contains .github/workflows/nabu-image.yml "739161a890128f23bd1aa679d8754a9ea299269e"
 assert_contains .github/workflows/nabu-image.yml "packages/package-hash.sh kernel"
+assert_contains .github/workflows/nabu-image.yml "ARMADA_PKG_REGISTRY"
+assert_contains .github/workflows/nabu-image.yml 'ghcr.io/${owner}/armada/pkg'
 assert_not_contains .github/workflows/nabu-image.yml "7.2.6"
 assert_not_contains .github/workflows/nabu-image.yml "ci/nabu-kernel"
 

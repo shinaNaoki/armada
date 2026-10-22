@@ -158,9 +158,13 @@ jobs:
         run: |
           set -euxo pipefail
           # just build picks the local kernel image (same content hash) and
-          # pulls every other package image from ghcr.io/armada-os/armada/pkg.
+          # pulls every other package image from the fork's package registry.
+          # The Gamescope touch patch changes packages/gamescope's hash, so the
+          # upstream registry cannot satisfy the new ref.
+          owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          echo '${{ secrets.GITHUB_TOKEN }}' | sudo podman login ghcr.io -u '${{ github.actor }}' --password-stdin
           command -v just; just --version
-          sudo env PATH="$PATH" just build
+          sudo env PATH="$PATH" ARMADA_PKG_REGISTRY="ghcr.io/${owner}/armada/pkg" just build
           sudo podman images --format '{{.Repository}}:{{.Tag}} {{.Size}}'
 
       - name: Derive nabu image (fstab/hostname/kargs + UKI hooks)
