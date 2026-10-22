@@ -10,6 +10,7 @@ if [[ -z "$model" ]]; then
     model=$(tr -d '\0' </sys/firmware/devicetree/base/model 2>/dev/null || true)
 fi
 case "$model" in
+    "Xiaomi Pad 5"|"Xiaomi Pad 5 (nabu) with cameras") profile=xiaomi-nabu ;;
     "AYANEO Pocket EVO") profile=ayaneo-pocket-evo ;;
     "AYN Odin 2") profile=ayn-odin-2 ;;
     "AYN Odin 2 Mini") profile=ayn-odin-2-mini ;;

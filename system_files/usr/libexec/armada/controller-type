@@ -174,7 +174,16 @@ def main(argv):
         save_type(argv[2])
         return 0
     if command == "apply":
-        return 0 if apply_with_retry(load_type(available_types())) else 1
+        if apply_with_retry(load_type(available_types())):
+            return 0
+        # Tablets have no built-in controller; InputPlumber has no
+        # CompositeDevice until an external pad is connected.  Treat that as
+        # "nothing to apply" instead of a failed boot unit.
+        if not composite_paths():
+            print("controller-type: no CompositeDevice; nothing to apply",
+                  file=sys.stderr)
+            return 0
+        return 1
     print("usage: controller-type get|set|apply", file=sys.stderr)
     return 2
 

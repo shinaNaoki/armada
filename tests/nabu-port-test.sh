@@ -167,6 +167,21 @@ assert_contains ci/nabu/kernel.required "CONFIG_VIDEO_QCOM_CAMSS=m"
 assert_contains ci/nabu/kernel.required "CONFIG_VIDEO_OV13B10=m"
 assert_contains ci/nabu/kernel.required "CONFIG_VIDEO_OV8856=m"
 
+# --- nabu device profile / gamescope / plain-root fixes -------------------
+assert_file system_files/usr/lib/armada/devices/xiaomi-nabu.conf
+assert_contains system_files/usr/libexec/armada/device-env '"Xiaomi Pad 5"|"Xiaomi Pad 5 (nabu) with cameras") profile=xiaomi-nabu'
+assert_contains system_files/usr/lib/armada/devices/xiaomi-nabu.conf 'ARMADA_PANEL_ORIENTATION=right'
+assert_contains system_files/usr/lib/armada/devices/xiaomi-nabu.conf 'ARMADA_GAMESCOPE_FAKE_OUTPUT_MM=237x148'
+assert_file system_files/etc/environment.d/90-nabu-gamescope.conf
+assert_contains system_files/etc/environment.d/90-nabu-gamescope.conf 'ORIENTATION=right'
+assert_contains system_files/etc/environment.d/90-nabu-gamescope.conf 'FORCE_COMPOSITION_ROTATION=1'
+assert_contains system_files/usr/libexec/armada/controller-type 'no CompositeDevice; nothing to apply'
+assert_contains ci/nabu/kernel.config 'CONFIG_SQUASHFS_ZSTD=y'
+assert_contains ci/nabu/kernel.required 'CONFIG_SQUASHFS_ZSTD=y'
+assert_contains scripts/ci/prepare-rootfs.sh 'bootc-generic-growpart.service'
+assert_contains scripts/ci/prepare-rootfs.sh 'rmtfs-dir.service'
+assert_contains scripts/ci/prepare-rootfs.sh '90-nabu-gamescope.conf'
+
 # --- Plasma / SDDM config layer -------------------------------------------
 assert_file system_files/etc/skel/.config/kwinoutputconfig.json
 assert_contains system_files/etc/skel/.config/kwinoutputconfig.json '"connectorName": "DSI-1"'

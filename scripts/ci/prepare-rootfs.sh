@@ -27,6 +27,7 @@ set -euo pipefail
 
 image=${1:?usage: prepare-rootfs.sh <image-ref> <outdir>}
 out=${2:?usage: prepare-rootfs.sh <image-ref> <outdir>}
+repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 ROOT_PART=${ROOT_PART:-linux}
 DTB_NAME=${DTB_NAME:-sm8150-xiaomi-nabu}
 CONSOLE_MODE=${CONSOLE_MODE:-quiet}
@@ -107,7 +108,23 @@ systemctl --root "$mnt" mask \
     bootc-fetch-apply-updates.service \
     ostree-finalize-staged.service \
     armada-uki-sync.service \
+    bootc-generic-growpart.service \
+    armada-update-reserve.service \
+    rmtfs-dir.service \
     >/dev/null 2>&1 || true
+
+# build-nabu-export.yml re-exports an already-published container, so the
+# device-level fixes in this checkout would otherwise not be in the image.
+# Install the small nabu files directly; a full nabu-image.yml build also has
+# them in the container, and this is idempotent.
+install -Dm0644 "$repo/system_files/usr/lib/armada/devices/xiaomi-nabu.conf" \
+    "$mnt/usr/lib/armada/devices/xiaomi-nabu.conf"
+install -Dm0755 "$repo/system_files/usr/libexec/armada/device-env" \
+    "$mnt/usr/libexec/armada/device-env"
+install -Dm0755 "$repo/system_files/usr/libexec/armada/controller-type" \
+    "$mnt/usr/libexec/armada/controller-type"
+install -Dm0644 "$repo/system_files/etc/environment.d/90-nabu-gamescope.conf" \
+    "$mnt/etc/environment.d/90-nabu-gamescope.conf"
 # Remote diagnostics; harmless if openssh-server is not installed.
 systemctl --root "$mnt" enable sshd.service >/dev/null 2>&1 || true
 
