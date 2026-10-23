@@ -182,6 +182,14 @@ assert_contains scripts/ci/prepare-rootfs.sh 'bootc-generic-growpart.service'
 assert_contains scripts/ci/prepare-rootfs.sh 'rmtfs-dir.service'
 assert_contains scripts/ci/prepare-rootfs.sh '90-nabu-gamescope.conf'
 
+# --- SM8150 thermal tuning ------------------------------------------------
+assert_contains system_files/etc/environment.d/90-nabu-gamescope.conf 'INTERNAL_WIDTH=1280'
+assert_contains system_files/etc/environment.d/90-nabu-gamescope.conf 'SCREEN_WIDTH=1280'
+assert_contains system_files/etc/environment.d/90-nabu-gamescope.conf 'STEAM_DISPLAY_REFRESH_LIMITS=60'
+assert_contains system_files/usr/share/armada/power-profiles.conf '[underclock.SM8150.medium]'
+assert_contains system_files/usr/libexec/armada/device-env 'SM8150)'
+assert_contains image/Containerfile 'chmod -x /usr/bin/mangoapp'
+
 # --- Plasma / SDDM config layer -------------------------------------------
 assert_file system_files/etc/skel/.config/kwinoutputconfig.json
 assert_contains system_files/etc/skel/.config/kwinoutputconfig.json '"connectorName": "DSI-1"'

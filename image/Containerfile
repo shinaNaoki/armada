@@ -81,6 +81,11 @@ RUN chmod 0755 /usr/libexec/armada/armada-uki-update /usr/libexec/armada/armada-
  && chmod 0755 /usr/libexec/nabu-tablet-mode /usr/bin/nabu-tablet-toggle \
  && rm -f /usr/lib/systemd/system/ostree-finalize-staged.service.d/10-armada-bootimg.conf
 
+# MangoApp's overlay costs a measurable amount of CPU on the tablet's
+# 2.5K/120Hz panel.  Keep the binary installed but non-executable; users who
+# want the overlay can chmod +x it again.
+RUN chmod -x /usr/bin/mangoapp 2>/dev/null || true
+
 # New libssc/libqrtr/libhexagonrpc libraries come from the build stage.
 RUN ldconfig
 
