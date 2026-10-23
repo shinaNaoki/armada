@@ -212,6 +212,15 @@ assert_file packages/gamescope/patches/0029-wlserver-associate-virtual-touch-wit
 assert_contains packages/gamescope/patches/0029-wlserver-associate-virtual-touch-with-internal.patch 'connector == nullptr'
 assert_contains packages/gamescope/patches/0029-wlserver-associate-virtual-touch-with-internal.patch 'GAMESCOPE_SCREEN_TYPE_INTERNAL'
 
+# --- SM8150 kernel tuning contract -----------------------------------------
+assert_contains ci/nabu/kernel.config 'CONFIG_CPU_FREQ_GOV_CONSERVATIVE=y'
+assert_contains ci/nabu/kernel.config 'CONFIG_ARM_QCOM_CPUFREQ_HW=y'
+assert_contains ci/nabu/kernel.config 'CONFIG_ENERGY_MODEL=y'
+assert_contains ci/nabu/kernel.config 'CONFIG_LRU_GEN=y'
+assert_contains ci/nabu/kernel.config 'CONFIG_UCLAMP_TASK=y'
+assert_contains ci/nabu/kernel.required 'CONFIG_CPU_FREQ_GOV_CONSERVATIVE=y'
+assert_contains ci/nabu/kernel.required 'CONFIG_THERMAL_GOV_STEP_WISE=y'
+
 # --- CI --------------------------------------------------------------------
 assert_file .github/workflows/nabu-image.yml
 assert_contains .github/workflows/nabu-image.yml "Build kernel (Armada tarball layout)"
